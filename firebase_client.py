@@ -14,6 +14,7 @@ Firestore layout:
   users/{username}/sessions/{session_id}/searches/{id}
     query, album_filter, found, song_title, album, timestamp
 
+
   community_facts/{id}
     username, category, title, content, status, submitted_at, reviewed_by, reviewed_at
 
