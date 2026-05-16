@@ -1,149 +1,274 @@
 """
-firebase_client.py
-──────────────────
-Handles all Firestore interactions for the SwiftieBot chatbot.
+firebase_client.py — SwiftieBot
+────────────────────────────────
+Firestore layout:
+  users/{username}
+    password_hash, display_name, created_at, last_login, is_admin
 
-Firestore structure:
-  sessions/
-    {session_id}/
-      created_at: timestamp
-      message_count: int
-      messages/          ← sub-collection
-        {auto_id}/
-          role: "user" | "assistant"
-          content: str
-          timestamp: ISO string
+  users/{username}/sessions/{session_id}
+    created_at, message_count, last_updated
+
+  users/{username}/sessions/{session_id}/messages/{id}
+    role, content, timestamp
+
+  users/{username}/sessions/{session_id}/searches/{id}
+    query, album_filter, found, song_title, album, timestamp
+
+  community_facts/{id}
+    username, category, title, content, status, submitted_at, reviewed_by, reviewed_at
+
+NOTE: All queries use single-field ordering only to avoid needing composite indexes.
 """
 
-import os
-import json
+import os, json, hashlib
 from datetime import datetime, timezone
 
 import firebase_admin
 from firebase_admin import credentials, firestore
 
-# ── Initialise Firebase (runs once) ──────────────────────────────────────────
-
+# ── Init ──────────────────────────────────────────────────────────────────────
 def _init_firebase():
-    """Initialise the Firebase Admin SDK using the service-account JSON.
-
-    Reads credentials from one of two places (in priority order):
-      1. FIREBASE_SERVICE_ACCOUNT  env-var containing the JSON string
-      2. firebase_service_account.json file next to this module
-    """
-    if firebase_admin._apps:          # already initialised
+    if firebase_admin._apps:
         return firestore.client()
-
-    # Option 1 – env var (recommended for Streamlit Cloud secrets)
     raw = os.environ.get("FIREBASE_SERVICE_ACCOUNT")
     if raw:
-        cred_dict = json.loads(raw)
-        cred = credentials.Certificate(cred_dict)
+        cred = credentials.Certificate(json.loads(raw))
     else:
-        # Option 2 – local JSON file (for development)
         sa_path = os.path.join(os.path.dirname(__file__), "firebase_service_account.json")
         if not os.path.exists(sa_path):
             raise FileNotFoundError(
                 "Firebase credentials not found.\n"
-                "Either set the FIREBASE_SERVICE_ACCOUNT env-var or place "
-                "firebase_service_account.json next to firebase_client.py"
+                "Set FIREBASE_SERVICE_ACCOUNT env-var or place "
+                "firebase_service_account.json next to this file."
             )
         cred = credentials.Certificate(sa_path)
-
     firebase_admin.initialize_app(cred)
     return firestore.client()
 
-
 def _db():
-    """Return a Firestore client, initialising if necessary."""
     return _init_firebase()
 
+def _hash(pw: str) -> str:
+    return hashlib.sha256(pw.encode()).hexdigest()
 
-# ── Public helpers ────────────────────────────────────────────────────────────
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
-def create_session(session_id: str) -> None:
-    """Create a new session document in Firestore."""
+
+# ── Auth ──────────────────────────────────────────────────────────────────────
+def register_user(username: str, password: str, display_name: str = "") -> dict:
     try:
         db = _db()
-        db.collection("sessions").document(session_id).set(
-            {
-                "created_at": datetime.now(timezone.utc).isoformat(),
-                "message_count": 0,
-            }
-        )
+        username = username.strip().lower()
+        if not username or not password:
+            return {"success": False, "error": "Username and password cannot be empty."}
+        if len(username) < 3:
+            return {"success": False, "error": "Username must be at least 3 characters."}
+        if len(password) < 6:
+            return {"success": False, "error": "Password must be at least 6 characters."}
+        if not username.isalnum():
+            return {"success": False, "error": "Username can only contain letters and numbers."}
+
+        ref = db.collection("users").document(username)
+        if ref.get().exists:
+            return {"success": False, "error": "Username already taken. Please choose another."}
+
+        dn = display_name.strip() or username
+        ref.set({
+            "password_hash": _hash(password),
+            "display_name": dn,
+            "created_at": _now(),
+            "last_login": _now(),
+            "is_admin": False,
+        })
+        return {"success": True, "user": {"username": username, "display_name": dn, "is_admin": False}}
     except Exception as e:
-        print(f"[Firebase] create_session error: {e}")
+        return {"success": False, "error": str(e)}
 
 
-def save_message(session_id: str, role: str, content: str) -> None:
-    """Append a message to the session's sub-collection and increment counter."""
+def login_user(username: str, password: str) -> dict:
     try:
         db = _db()
-        session_ref = db.collection("sessions").document(session_id)
-
-        # Add message to sub-collection
-        session_ref.collection("messages").add(
-            {
-                "role": role,
-                "content": content,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            }
-        )
-
-        # Increment message counter on the parent document
-        session_ref.update({"message_count": firestore.Increment(1)})
-
+        username = username.strip().lower()
+        if not username or not password:
+            return {"success": False, "error": "Please enter username and password."}
+        ref = db.collection("users").document(username)
+        doc = ref.get()
+        if not doc.exists:
+            return {"success": False, "error": "Username not found."}
+        data = doc.to_dict()
+        if data.get("password_hash") != _hash(password):
+            return {"success": False, "error": "Incorrect password."}
+        ref.update({"last_login": _now()})
+        dn = data.get("display_name", username)
+        return {"success": True, "user": {
+            "username": username,
+            "display_name": dn,
+            "is_admin": data.get("is_admin", False),
+        }}
     except Exception as e:
-        print(f"[Firebase] save_message error: {e}")
+        return {"success": False, "error": str(e)}
 
 
-def get_chat_history(session_id: str) -> list[dict]:
-    """Return all messages for a session, ordered by timestamp."""
+# ── Sessions ──────────────────────────────────────────────────────────────────
+def create_session(username: str, session_id: str) -> None:
     try:
-        db = _db()
-        docs = (
-            _db()
-            .collection("sessions")
-            .document(session_id)
-            .collection("messages")
-            .order_by("timestamp")
-            .stream()
-        )
-        return [doc.to_dict() for doc in docs]
+        now = _now()
+        _db().collection("users").document(username) \
+             .collection("sessions").document(session_id).set({
+                 "created_at": now,
+                 "last_updated": now,
+                 "message_count": 0,
+             })
     except Exception as e:
-        print(f"[Firebase] get_chat_history error: {e}")
-        return []
+        print(f"[Firebase] create_session: {e}")
 
 
-def save_search(session_id: str, query: str, album_filter: str | None, result: dict) -> None:
-    """Save a song search query and its result to Firestore."""
+def get_user_sessions(username: str) -> list[dict]:
+    """Sessions ordered by last_updated — single field, no composite index needed."""
     try:
-        db = _db()
-        db.collection("sessions").document(session_id).collection("searches").add(
-            {
-                "query": query,
-                "album_filter": album_filter or "any",
-                "found": result.get("found", False),
-                "song_title": result.get("song_title", ""),
-                "album": result.get("album", ""),
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            }
-        )
-    except Exception as e:
-        print(f"[Firebase] save_search error: {e}")
-
-
-def get_all_sessions() -> list[dict]:
-    """Return all session metadata (for admin/analytics use)."""
-    try:
-        db = _db()
-        docs = db.collection("sessions").order_by("created_at", direction=firestore.Query.DESCENDING).limit(100).stream()
+        docs = _db().collection("users").document(username) \
+                    .collection("sessions") \
+                    .order_by("last_updated", direction=firestore.Query.DESCENDING) \
+                    .limit(30).stream()
         results = []
         for doc in docs:
-            data = doc.to_dict()
-            data["session_id"] = doc.id
-            results.append(data)
+            d = doc.to_dict()
+            d["session_id"] = doc.id
+            results.append(d)
         return results
     except Exception as e:
-        print(f"[Firebase] get_all_sessions error: {e}")
+        print(f"[Firebase] get_user_sessions: {e}")
         return []
+
+
+def get_user_session_history(username: str, session_id: str) -> list[dict]:
+    """Load messages for a session ordered by timestamp."""
+    try:
+        docs = _db().collection("users").document(username) \
+                    .collection("sessions").document(session_id) \
+                    .collection("messages") \
+                    .order_by("timestamp") \
+                    .stream()
+        return [{"role": d["role"], "content": d["content"]} for d in (doc.to_dict() for doc in docs)]
+    except Exception as e:
+        print(f"[Firebase] get_user_session_history: {e}")
+        return []
+
+
+def delete_user_session(username: str, session_id: str) -> None:
+    try:
+        db = _db()
+        session_ref = db.collection("users").document(username) \
+                        .collection("sessions").document(session_id)
+        # Delete sub-collection messages
+        for doc in session_ref.collection("messages").stream():
+            doc.reference.delete()
+        for doc in session_ref.collection("searches").stream():
+            doc.reference.delete()
+        session_ref.delete()
+    except Exception as e:
+        print(f"[Firebase] delete_user_session: {e}")
+
+
+# ── Messages ──────────────────────────────────────────────────────────────────
+def save_message(username: str, session_id: str, role: str, content: str) -> None:
+    try:
+        db = _db()
+        now = _now()
+        session_ref = db.collection("users").document(username) \
+                        .collection("sessions").document(session_id)
+        session_ref.collection("messages").add({
+            "role": role,
+            "content": content,
+            "timestamp": now,
+        })
+        session_ref.update({
+            "message_count": firestore.Increment(1),
+            "last_updated": now,
+        })
+    except Exception as e:
+        print(f"[Firebase] save_message: {e}")
+
+
+def load_messages(username: str, session_id: str) -> list[dict]:
+    return get_user_session_history(username, session_id)
+
+
+# ── Searches ──────────────────────────────────────────────────────────────────
+def save_search(username: str, session_id: str, query: str,
+                album_filter: str | None, result: dict) -> None:
+    try:
+        _db().collection("users").document(username) \
+             .collection("sessions").document(session_id) \
+             .collection("searches").add({
+                 "query": query,
+                 "album_filter": album_filter or "any",
+                 "found": result.get("found", False),
+                 "song_title": result.get("song_title", ""),
+                 "album": result.get("album", ""),
+                 "timestamp": _now(),
+             })
+    except Exception as e:
+        print(f"[Firebase] save_search: {e}")
+
+
+# ── Community facts ───────────────────────────────────────────────────────────
+def submit_community_fact(username: str, category: str, title: str, content: str) -> None:
+    _db().collection("community_facts").add({
+        "username": username,
+        "category": category,
+        "title": title,
+        "content": content,
+        "status": "pending",
+        "submitted_at": _now(),
+        "reviewed_by": None,
+        "reviewed_at": None,
+    })
+
+
+def get_community_facts(status: str) -> list[dict]:
+    """
+    Fetch facts by status only — single field filter, no composite index needed.
+    Sorted in Python to avoid needing a (status + submitted_at) composite index.
+    """
+    try:
+        docs = _db().collection("community_facts") \
+                    .where("status", "==", status) \
+                    .stream()
+        results = []
+        for doc in docs:
+            d = doc.to_dict()
+            d["id"] = doc.id
+            results.append(d)
+        # Sort by submitted_at in Python — no Firestore index required
+        results.sort(key=lambda x: x.get("submitted_at", ""), reverse=(status != "approved"))
+        return results
+    except Exception as e:
+        print(f"[Firebase] get_community_facts: {e}")
+        return []
+
+
+def review_community_fact(fact_id: str, new_status: str, reviewed_by: str) -> None:
+    try:
+        _db().collection("community_facts").document(fact_id).update({
+            "status": new_status,
+            "reviewed_by": reviewed_by,
+            "reviewed_at": _now(),
+        })
+    except Exception as e:
+        print(f"[Firebase] review_community_fact: {e}")
+
+
+def get_approved_facts_for_prompt() -> str:
+    """Return approved community facts formatted for injection into the system prompt."""
+    try:
+        facts = get_community_facts("approved")
+        if not facts:
+            return ""
+        lines = ["\n\nCOMMUNITY FACTS (verified by admin — use when relevant):"]
+        for f in facts[:15]:
+            lines.append(f"[{f.get('category','').upper()}] {f.get('title','')}: {f.get('content','')}")
+        return "\n".join(lines)
+    except Exception:
+        return ""

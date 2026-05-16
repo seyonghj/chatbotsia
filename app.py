@@ -1,11 +1,16 @@
 import streamlit as st
 from groq import Groq
-import os
-from firebase_client import save_message, get_chat_history, create_session, save_search
-from datetime import datetime
-import uuid
+import os, uuid, json as _json
+from firebase_client import (
+    register_user, login_user,
+    create_session, get_user_sessions,
+    get_user_session_history, delete_user_session,
+    save_message, load_messages, save_search,
+    submit_community_fact, get_community_facts,
+    review_community_fact, get_approved_facts_for_prompt,
+)
 
-# ── Page config ──────────────────────────────────────────────────────────────
+# ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="SwiftieBot",
     page_icon="🎸",
@@ -13,374 +18,693 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ── Custom CSS ────────────────────────────────────────────────────────────────
+# ── CSS ───────────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;1,400&family=DM+Sans:wght@300;400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;1,400&family=DM+Sans:wght@300;400;500;600&display=swap');
 
 html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
 
+/* ── Background ── */
 .stApp {
-    background: linear-gradient(135deg, #1a0a2e 0%, #16213e 40%, #0f3460 100%);
+    background: linear-gradient(135deg, #0d0718 0%, #12102a 40%, #0a1628 100%);
     min-height: 100vh;
 }
 
+/* ── Sidebar ── */
 [data-testid="stSidebar"] {
-    background: linear-gradient(180deg, #1a0a2e 0%, #0d1b2a 100%);
-    border-right: 1px solid rgba(212,175,55,0.3);
+    background: linear-gradient(180deg, #0d0718 0%, #0a1020 100%);
+    border-right: 1px solid rgba(212,175,55,0.2);
 }
 [data-testid="stSidebar"] * { color: #e8d5b7 !important; }
+[data-testid="stSidebar"] .stMarkdown p { color: #a89bc2 !important; }
 
-/* Tabs */
+/* ── Tabs ── */
 [data-testid="stTabs"] button {
     font-family: 'DM Sans', sans-serif !important;
-    font-size: 0.95rem !important;
-    color: #a89bc2 !important;
+    font-size: 0.9rem !important;
+    font-weight: 500 !important;
+    color: #7a6e8a !important;
     border-bottom: 2px solid transparent !important;
-    padding: 0.5rem 1.2rem !important;
+    padding: 0.6rem 1.2rem !important;
+    transition: all 0.2s !important;
 }
 [data-testid="stTabs"] button[aria-selected="true"] {
     color: #d4af37 !important;
     border-bottom: 2px solid #d4af37 !important;
     background: transparent !important;
 }
+[data-testid="stTabs"] button:hover { color: #d4af37 !important; }
 [data-testid="stTabs"] [role="tablist"] {
-    border-bottom: 1px solid rgba(212,175,55,0.2) !important;
-    gap: 0.5rem;
+    border-bottom: 1px solid rgba(212,175,55,0.15) !important;
+    gap: 0.3rem;
+    margin-bottom: 1rem;
 }
 
-/* Header */
-.ts-header {
-    text-align: center;
-    padding: 1.5rem 0 0.5rem;
-}
+/* ── Header ── */
+.ts-header { text-align: center; padding: 1.2rem 0 0.5rem; }
 .ts-header h1 {
     font-family: 'Playfair Display', serif;
-    font-size: 2.4rem;
-    background: linear-gradient(90deg, #d4af37, #f5e6a3, #d4af37);
+    font-size: 2.6rem;
+    background: linear-gradient(90deg, #b8860b, #f5e6a3, #d4af37, #f5e6a3, #b8860b);
+    background-size: 200%;
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
     margin: 0;
-    letter-spacing: 1px;
+    letter-spacing: 2px;
+    animation: shimmer 4s linear infinite;
 }
-.ts-header p {
-    color: #a89bc2;
-    font-size: 0.9rem;
-    margin-top: 0.3rem;
-    font-style: italic;
+@keyframes shimmer { 0%{background-position:0%} 100%{background-position:200%} }
+.ts-header p { color: #7a6e8a; font-size: 0.88rem; margin-top: 0.3rem; font-style: italic; }
+.ts-divider {
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(212,175,55,0.4), transparent);
+    margin: 0.8rem 0 1.2rem;
 }
 
-/* Chat messages */
+/* ── Chat messages ── */
 .stChatMessage {
-    background: rgba(255,255,255,0.04) !important;
-    border: 1px solid rgba(212,175,55,0.15) !important;
-    border-radius: 12px !important;
-    margin-bottom: 0.6rem !important;
+    background: rgba(255,255,255,0.03) !important;
+    border: 1px solid rgba(212,175,55,0.12) !important;
+    border-radius: 14px !important;
+    margin-bottom: 0.7rem !important;
+    padding: 0.2rem 0 !important;
+    transition: border-color 0.2s !important;
 }
+.stChatMessage:hover { border-color: rgba(212,175,55,0.25) !important; }
 [data-testid="stChatMessageContent"] p {
-    color: #e8d5b7 !important;
-    font-size: 0.97rem;
-    line-height: 1.65;
+    color: #ddd0be !important;
+    font-size: 0.95rem;
+    line-height: 1.7;
 }
 
-/* Input box */
-[data-testid="stChatInput"] {
-    border: 1px solid rgba(212,175,55,0.4) !important;
+/* ── Chat input ── */
+[data-testid="stChatInput"] textarea {
+    background: rgba(255,255,255,0.04) !important;
+    border: 1px solid rgba(212,175,55,0.3) !important;
     border-radius: 30px !important;
-    background: rgba(255,255,255,0.06) !important;
     color: #e8d5b7 !important;
+    font-family: 'DM Sans', sans-serif !important;
 }
 [data-testid="stChatInput"]:focus-within {
     border-color: #d4af37 !important;
-    box-shadow: 0 0 0 2px rgba(212,175,55,0.2) !important;
+    box-shadow: 0 0 0 2px rgba(212,175,55,0.15) !important;
 }
 
-/* Text inputs */
+/* ── Text inputs ── */
 [data-testid="stTextInput"] input {
-    background: rgba(255,255,255,0.06) !important;
-    border: 1px solid rgba(212,175,55,0.35) !important;
+    background: rgba(255,255,255,0.05) !important;
+    border: 1px solid rgba(212,175,55,0.25) !important;
+    border-radius: 10px !important;
+    color: #e8d5b7 !important;
+    font-family: 'DM Sans', sans-serif !important;
+    padding: 0.55rem 0.9rem !important;
+    transition: all 0.2s !important;
+}
+[data-testid="stTextInput"] input:focus {
+    border-color: #d4af37 !important;
+    box-shadow: 0 0 0 2px rgba(212,175,55,0.12) !important;
+    background: rgba(255,255,255,0.07) !important;
+}
+[data-testid="stTextInput"] label { color: #8a7ea0 !important; font-size: 0.85rem !important; }
+
+/* ── Text area ── */
+[data-testid="stTextArea"] textarea {
+    background: rgba(255,255,255,0.05) !important;
+    border: 1px solid rgba(212,175,55,0.25) !important;
     border-radius: 10px !important;
     color: #e8d5b7 !important;
     font-family: 'DM Sans', sans-serif !important;
 }
-[data-testid="stTextInput"] input:focus {
+[data-testid="stTextArea"] textarea:focus {
     border-color: #d4af37 !important;
-    box-shadow: 0 0 0 2px rgba(212,175,55,0.15) !important;
+    box-shadow: 0 0 0 2px rgba(212,175,55,0.12) !important;
 }
-[data-testid="stTextInput"] label { color: #a89bc2 !important; }
+[data-testid="stTextArea"] label { color: #8a7ea0 !important; font-size: 0.85rem !important; }
 
-/* Select box */
+/* ── Selectbox ── */
 [data-testid="stSelectbox"] > div > div {
-    background: rgba(255,255,255,0.06) !important;
-    border: 1px solid rgba(212,175,55,0.35) !important;
+    background: rgba(255,255,255,0.05) !important;
+    border: 1px solid rgba(212,175,55,0.25) !important;
     color: #e8d5b7 !important;
     border-radius: 10px !important;
 }
 
-/* Buttons */
+/* ── Buttons ── */
 .stButton > button {
-    background: linear-gradient(135deg, rgba(212,175,55,0.2), rgba(212,175,55,0.05));
-    border: 1px solid rgba(212,175,55,0.4);
+    background: linear-gradient(135deg, rgba(212,175,55,0.15), rgba(212,175,55,0.05));
+    border: 1px solid rgba(212,175,55,0.35);
     color: #d4af37 !important;
-    border-radius: 8px;
+    border-radius: 10px;
     font-family: 'DM Sans', sans-serif;
     font-size: 0.85rem;
+    font-weight: 500;
     transition: all 0.2s;
     width: 100%;
+    padding: 0.45rem 1rem !important;
 }
 .stButton > button:hover {
-    background: rgba(212,175,55,0.3);
+    background: rgba(212,175,55,0.25);
     border-color: #d4af37;
     transform: translateY(-1px);
+    box-shadow: 0 4px 15px rgba(212,175,55,0.15);
+}
+.stButton > button:active { transform: translateY(0); }
+
+/* ── Auth modal overlay ── */
+.modal-overlay {
+    position: fixed;
+    top: 0; left: 0;
+    width: 100vw; height: 100vh;
+    background: rgba(5,3,15,0.85);
+    backdrop-filter: blur(8px);
+    z-index: 9998;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.modal-box {
+    background: linear-gradient(145deg, #1a1030, #0f1a30);
+    border: 1px solid rgba(212,175,55,0.35);
+    border-radius: 20px;
+    padding: 2.5rem;
+    width: 100%;
+    max-width: 440px;
+    box-shadow: 0 25px 60px rgba(0,0,0,0.6), 0 0 40px rgba(212,175,55,0.08);
+    position: relative;
+}
+.modal-box h2 {
+    font-family: 'Playfair Display', serif;
+    color: #d4af37;
+    text-align: center;
+    font-size: 1.8rem;
+    margin: 0 0 0.3rem;
+}
+.modal-box .modal-sub {
+    text-align: center;
+    color: #7a6e8a;
+    font-size: 0.88rem;
+    margin-bottom: 1.8rem;
+    font-style: italic;
+}
+.modal-tabs {
+    display: flex;
+    gap: 0;
+    margin-bottom: 1.5rem;
+    background: rgba(255,255,255,0.04);
+    border-radius: 10px;
+    padding: 4px;
+    border: 1px solid rgba(212,175,55,0.15);
+}
+.modal-tab {
+    flex: 1;
+    text-align: center;
+    padding: 0.5rem;
+    border-radius: 7px;
+    font-size: 0.88rem;
+    font-weight: 500;
+    color: #7a6e8a;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+.modal-tab.active {
+    background: rgba(212,175,55,0.18);
+    color: #d4af37;
+    border: 1px solid rgba(212,175,55,0.3);
 }
 
-/* Song result card */
+/* ── Welcome hero (shown before login) ── */
+.hero-section {
+    text-align: center;
+    padding: 4rem 2rem;
+}
+.hero-section .hero-icon { font-size: 4rem; margin-bottom: 1rem; }
+.hero-section h2 {
+    font-family: 'Playfair Display', serif;
+    font-size: 2rem;
+    color: #d4af37;
+    margin: 0 0 0.5rem;
+}
+.hero-section p { color: #7a6e8a; font-size: 0.95rem; line-height: 1.7; }
+.hero-features {
+    display: flex;
+    gap: 1rem;
+    justify-content: center;
+    flex-wrap: wrap;
+    margin-top: 2rem;
+}
+.hero-feature {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(212,175,55,0.2);
+    border-radius: 12px;
+    padding: 1rem 1.4rem;
+    text-align: center;
+    min-width: 130px;
+    color: #a89bc2;
+    font-size: 0.85rem;
+}
+.hero-feature .feat-icon { font-size: 1.6rem; margin-bottom: 0.4rem; }
+.hero-feature span { color: #d4af37; font-weight: 600; display: block; font-size: 0.82rem; }
+
+/* ── Song card ── */
 .song-card {
-    background: rgba(255,255,255,0.05);
-    border: 1px solid rgba(212,175,55,0.25);
-    border-radius: 14px;
-    padding: 1.4rem 1.6rem;
+    background: linear-gradient(145deg, rgba(212,175,55,0.06), rgba(255,255,255,0.03));
+    border: 1px solid rgba(212,175,55,0.2);
+    border-radius: 16px;
+    padding: 1.6rem 1.8rem;
     margin-top: 1rem;
     color: #e8d5b7;
     line-height: 1.7;
+    position: relative;
+    overflow: hidden;
+}
+.song-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, #d4af37, transparent);
 }
 .song-card h3 {
     font-family: 'Playfair Display', serif;
-    color: #d4af37;
-    font-size: 1.4rem;
-    margin: 0 0 0.2rem;
+    color: #f0d060;
+    font-size: 1.5rem;
+    margin: 0 0 0.3rem;
 }
 .song-card .album-tag {
     display: inline-block;
-    background: rgba(212,175,55,0.15);
-    border: 1px solid rgba(212,175,55,0.3);
-    color: #d4af37;
+    background: rgba(212,175,55,0.12);
+    border: 1px solid rgba(212,175,55,0.25);
+    color: #c9a227;
     border-radius: 20px;
-    padding: 2px 12px;
+    padding: 3px 14px;
     font-size: 0.78rem;
     margin-bottom: 1rem;
+    font-weight: 500;
+}
+.lyric-line {
+    background: rgba(212,175,55,0.06);
+    border-left: 3px solid #d4af37;
+    border-radius: 0 8px 8px 0;
+    padding: 0.7rem 1rem;
+    font-style: italic;
+    font-size: 1rem;
+    color: #f5e6a3;
+    margin: 0.5rem 0 1rem;
 }
 
-/* Quick chips */
-.chip-row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    margin: 1rem 0;
-    justify-content: center;
+/* ── Info rows ── */
+.info-label { color: #7a6e8a !important; font-size: 0.78rem !important; font-weight: 600 !important; text-transform: uppercase !important; letter-spacing: 0.5px !important; margin-bottom: 0.1rem !important; }
+.info-value { color: #e8d5b7 !important; font-size: 0.92rem !important; margin-bottom: 0.8rem !important; }
+
+/* ── Section blocks ── */
+.section-block {
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(212,175,55,0.1);
+    border-radius: 12px;
+    padding: 1rem 1.2rem;
+    margin-bottom: 0.8rem;
 }
-.chip {
+.section-block h4 { color: #d4af37; margin: 0 0 0.4rem; font-size: 0.88rem; font-weight: 600; }
+.section-block p { color: #c8bda8; font-size: 0.9rem; margin: 0; line-height: 1.6; }
+
+/* ── Fun fact ── */
+.fun-fact-block {
+    background: linear-gradient(135deg, rgba(212,175,55,0.08), rgba(212,175,55,0.03));
+    border: 1px solid rgba(212,175,55,0.25);
+    border-radius: 12px;
+    padding: 1rem 1.2rem;
+    margin-bottom: 0.8rem;
+    position: relative;
+}
+.fun-fact-block::before { content: '🥚'; position: absolute; top: -10px; right: 12px; font-size: 1.2rem; }
+.fun-fact-block p { color: #e8d5b7; font-size: 0.9rem; margin: 0; line-height: 1.6; }
+
+/* ── History card ── */
+.history-card {
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(212,175,55,0.15);
+    border-radius: 12px;
+    padding: 0.8rem 1rem;
+    margin-bottom: 0.5rem;
+    transition: border-color 0.2s;
+}
+.history-card:hover { border-color: rgba(212,175,55,0.35); }
+.history-card.current { border-color: rgba(212,175,55,0.45); background: rgba(212,175,55,0.05); }
+.history-card .h-id { color: #d4af37; font-size: 0.82rem; font-family: monospace; font-weight: 600; }
+.history-card .h-meta { color: #7a6e8a; font-size: 0.78rem; margin-top: 0.15rem; }
+
+/* ── Fact card ── */
+.fact-card {
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(212,175,55,0.15);
+    border-radius: 12px;
+    padding: 1rem 1.2rem;
+    margin-bottom: 0.6rem;
+    color: #e8d5b7;
+}
+.fact-card.pending { border-color: rgba(255,165,0,0.35); }
+.fact-cat {
+    display: inline-block;
     background: rgba(212,175,55,0.12);
-    border: 1px solid rgba(212,175,55,0.35);
-    color: #d4af37;
+    border: 1px solid rgba(212,175,55,0.25);
+    color: #c9a227;
     border-radius: 20px;
-    padding: 5px 14px;
-    font-size: 0.82rem;
-    cursor: pointer;
+    padding: 2px 10px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    margin-bottom: 0.4rem;
 }
+.fact-title { color: #d4af37; font-weight: 600; font-size: 0.95rem; margin: 0.2rem 0; }
+.fact-content { color: #b8a898; font-size: 0.88rem; line-height: 1.55; }
+.fact-meta { color: #5a5270; font-size: 0.75rem; margin-top: 0.4rem; }
 
-hr { border-color: rgba(212,175,55,0.2) !important; }
-::-webkit-scrollbar { width: 5px; }
+/* ── Chips ── */
+.chip-row { display:flex; flex-wrap:wrap; gap:8px; margin:1.2rem 0; justify-content:center; }
+.chip {
+    background: rgba(212,175,55,0.08);
+    border: 1px solid rgba(212,175,55,0.25);
+    color: #c9a227;
+    border-radius: 20px;
+    padding: 6px 16px;
+    font-size: 0.82rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+.chip:hover { background: rgba(212,175,55,0.15); border-color: #d4af37; }
+
+/* ── Alerts ── */
+.stSuccess > div { background: rgba(50,200,100,0.1) !important; border-color: rgba(50,200,100,0.3) !important; }
+.stError > div { background: rgba(220,50,50,0.1) !important; border-color: rgba(220,50,50,0.3) !important; }
+.stWarning > div { background: rgba(255,165,0,0.1) !important; border-color: rgba(255,165,0,0.3) !important; }
+
+/* ── Metric ── */
+[data-testid="stMetric"] { background: rgba(255,255,255,0.03); border-radius: 10px; padding: 0.6rem; }
+[data-testid="stMetricValue"] { color: #d4af37 !important; }
+[data-testid="stMetricLabel"] { color: #7a6e8a !important; }
+
+hr { border-color: rgba(212,175,55,0.12) !important; }
+::-webkit-scrollbar { width: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: rgba(212,175,55,0.3); border-radius: 10px; }
+::-webkit-scrollbar-thumb { background: rgba(212,175,55,0.25); border-radius: 10px; }
 </style>
 """, unsafe_allow_html=True)
 
-# ── Groq client init ──────────────────────────────────────────────────────────
+# ── Groq ──────────────────────────────────────────────────────────────────────
 groq_key = os.environ.get("GROQ_API_KEY") or st.secrets.get("GROQ_API_KEY", "")
 if not groq_key:
-    st.error("⚠️ GROQ_API_KEY is not set. Add it to .streamlit/secrets.toml")
+    st.error("⚠️ GROQ_API_KEY missing. Add it to .streamlit/secrets.toml")
     st.stop()
 
 groq_client = Groq(api_key=groq_key)
-GROQ_MODEL = "llama-3.1-8b-instant"
+GROQ_MODEL  = "llama-3.1-8b-instant"
+ADMIN_PW    = os.environ.get("ADMIN_PASSWORD") or st.secrets.get("ADMIN_PASSWORD", "swiftieadmin2024")
 
-def groq_chat(system: str, history: list[dict], user_msg: str) -> str:
-    """Send a conversation to Groq and return the reply."""
-    messages = [{"role": "system", "content": system}]
-    for m in history:
-        messages.append({"role": m["role"], "content": m["content"]})
-    if not messages or messages[-1]["role"] != "user":
-        messages.append({"role": "user", "content": user_msg})
-    response = groq_client.chat.completions.create(
-        model=GROQ_MODEL,
-        messages=messages,
-        max_tokens=1024,
-    )
-    return response.choices[0].message.content
-
-def groq_once(system: str, user_msg: str) -> str:
-    """Single-turn Groq call (for song search JSON)."""
-    response = groq_client.chat.completions.create(
-        model=GROQ_MODEL,
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": user_msg},
-        ],
-        max_tokens=800,
-    )
-    return response.choices[0].message.content
-
-def load_session(session_id: str) -> list[dict]:
-    """Load chat history from Firebase for the given session ID."""
-    try:
-        history = get_chat_history(session_id)
-        return history if history else []
-    except Exception:
-        return []
-
-# ── Session init ──────────────────────────────────────────────────────────────
-if "session_id" not in st.session_state:
-    st.session_state.session_id = str(uuid.uuid4())
-    create_session(st.session_state.session_id)
-    st.session_state.messages = []
-
-if "messages" not in st.session_state:
-    st.session_state.messages = load_session(st.session_state.session_id)
-
-if "song_result" not in st.session_state:
-    st.session_state.song_result = None
-
-if "restore_input" not in st.session_state:
-    st.session_state.restore_input = ""
-
-# ── System prompts ────────────────────────────────────────────────────────────
-CHAT_SYSTEM_PROMPT = """You are SwiftieBot, an expert and passionate assistant dedicated entirely to Taylor Swift.
-You have deep, encyclopedic knowledge of:
-
-DISCOGRAPHY (all albums):
-- Taylor Swift (2006), Fearless (2008), Speak Now (2010), Red (2012),
-  1989 (2014), reputation (2017), Lover (2019), folklore (2020),
-  evermore (2020), Midnights (2022), The Tortured Poets Department (2024)
-- Taylor's Version re-recordings: Fearless TV, Red TV, Speak Now TV, 1989 TV
-- Every song, B-side, vault track, collab, and bonus track
-
-SONGS:
-- Lyrics themes, songwriting stories, Easter eggs, hidden meanings
-- Co-writers, producers, instruments used
-- Chart performance, certifications, records broken
-- Music videos, live performances, iconic moments
-
-ERAS TOUR & CONCERTS:
-- Setlists, surprise songs, outfits, staging
-
-BIOGRAPHY:
-- Career milestones, personal life (as publicly known), awards,
-  business decisions (Scooter Braun dispute, re-recordings, etc.)
-
-Guidelines:
-- Be enthusiastic and warm, like a knowledgeable Swiftie friend
-- If asked something outside Taylor Swift, politely redirect
-- Format answers clearly with bullet points or short paragraphs
-- Add fun facts and Easter eggs when relevant
-- Use light emojis (✨🎸🌟💛) sparingly for warmth
-"""
-
-SONG_SEARCH_PROMPT = """You are a Taylor Swift music expert. When given a song name and optional album filter,
-return a JSON object with exactly these fields (no markdown, no backticks, pure JSON only):
-
+SONG_SEARCH_PROMPT = """You are a Taylor Swift music expert. Return ONLY a JSON object — no markdown, no backticks:
 {
   "found": true,
-  "song_title": "exact song title",
+  "song_title": "exact title",
   "album": "album name",
   "year": "release year",
-  "era": "era name (same as album usually)",
-  "writers": "comma-separated songwriters",
+  "era": "era name",
+  "writers": "comma-separated writers",
   "producers": "comma-separated producers",
-  "duration": "m:ss format if known, else Unknown",
-  "chart_peak": "e.g. #1 US Billboard Hot 100, or Unknown",
-  "certifications": "e.g. Diamond, 10x Platinum, or Unknown",
-  "themes": "2-3 sentence description of the song's themes and emotional tone",
-  "story": "2-3 sentences about the songwriting story, inspiration, or behind-the-scenes facts",
-  "iconic_moment": "one memorable cultural moment, live performance highlight, or fan fact",
-  "lyric_snippet": "a single SHORT iconic line (under 12 words) from the song — just the words, no quotes",
-  "fun_fact": "one surprising easter egg or fact fans love"
+  "duration": "m:ss or Unknown",
+  "chart_peak": "e.g. #1 US Billboard Hot 100 or Unknown",
+  "certifications": "e.g. Diamond or Unknown",
+  "themes": "2-3 sentences on themes and mood",
+  "story": "2-3 sentences on songwriting story/inspiration",
+  "iconic_moment": "one memorable cultural/performance moment",
+  "lyric_snippet": "one short iconic line under 12 words",
+  "fun_fact": "one easter egg or surprising fan fact"
 }
+If not found: {"found": false, "message": "brief helpful message"}
+Return ONLY the JSON."""
 
-If the song is NOT found or unclear, return:
-{ "found": false, "message": "brief helpful message about what you do know" }
+def build_system_prompt() -> str:
+    base = """You are SwiftieBot, an expert and passionate assistant dedicated entirely to Taylor Swift.
+You have deep encyclopedic knowledge of all her albums, songs, Eras Tour, Easter eggs,
+songwriting stories, chart records, awards, and biography.
+Albums: Taylor Swift (2006), Fearless (2008), Speak Now (2010), Red (2012), 1989 (2014),
+reputation (2017), Lover (2019), folklore (2020), evermore (2020), Midnights (2022),
+The Tortured Poets Department (2024), plus all Taylor's Version re-recordings.
+Be warm, enthusiastic, and knowledgeable — like a Swiftie best friend.
+If asked about anything unrelated to Taylor Swift, politely redirect.
+Use light emojis (✨🎸🌟💛) sparingly for warmth."""
+    try:
+        return base + get_approved_facts_for_prompt()
+    except Exception:
+        return base
 
-Return ONLY the JSON. No explanation, no markdown fences.
-"""
+def groq_chat(history: list[dict], user_msg: str) -> str:
+    msgs = [{"role": "system", "content": build_system_prompt()}]
+    for m in history:
+        msgs.append({"role": m["role"], "content": m["content"]})
+    if not msgs or msgs[-1]["role"] != "user":
+        msgs.append({"role": "user", "content": user_msg})
+    r = groq_client.chat.completions.create(model=GROQ_MODEL, messages=msgs, max_tokens=1024)
+    return r.choices[0].message.content
 
-# ── Sidebar ───────────────────────────────────────────────────────────────────
-with st.sidebar:
-    st.markdown("## 🌟 SwiftieBot")
-    st.markdown("---")
-
-    # ── Session display & restore ─────────────────────────────────────────────
-    st.markdown("**Your Session ID**")
-    st.code(st.session_state.session_id, language=None)
-    st.caption("Copy this to restore your chat later.")
-
-    st.markdown("**🔄 Restore a Previous Session**")
-    restore_id = st.text_input(
-        "Paste a Session ID",
-        value=st.session_state.restore_input,
-        placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
-        key="restore_id_input",
-        label_visibility="collapsed",
+def groq_once(user_msg: str) -> str:
+    r = groq_client.chat.completions.create(
+        model=GROQ_MODEL,
+        messages=[{"role":"system","content":SONG_SEARCH_PROMPT},{"role":"user","content":user_msg}],
+        max_tokens=800,
     )
-    if st.button("↩️ Load Session", key="btn_restore"):
-        restore_id = restore_id.strip()
-        if restore_id:
-            restored = load_session(restore_id)
-            if restored:
-                st.session_state.session_id = restore_id
-                st.session_state.messages = restored
-                st.session_state.song_result = None
-                st.session_state.restore_input = ""
-                st.success(f"Loaded {len(restored)} messages!")
-                st.rerun()
+    return r.choices[0].message.content
+
+# ── Session defaults ──────────────────────────────────────────────────────────
+_defaults = {
+    "logged_in": False,
+    "current_user": None,
+    "session_id": str(uuid.uuid4()),
+    "messages": [],
+    "song_result": None,
+    "auth_mode": "login",
+    "admin_authenticated": False,
+    "_inject_prompt": None,
+    "show_auth": False,
+}
+for k, v in _defaults.items():
+    if k not in st.session_state:
+        st.session_state[k] = v
+
+def uname() -> str | None:
+    return st.session_state.current_user["username"] if st.session_state.logged_in else None
+
+def dname() -> str:
+    return st.session_state.current_user["display_name"] if st.session_state.logged_in else ""
+
+# ════════════════════════════════════════════════════════════════════════════
+# AUTH POPUP MODAL
+# ════════════════════════════════════════════════════════════════════════════
+@st.dialog("🎸 SwiftieBot — Sign In", width="small")
+def show_auth_dialog():
+    mode = st.session_state.auth_mode
+
+    # Tab switcher inside dialog
+    col_l, col_r = st.columns(2)
+    with col_l:
+        if st.button("🔑 Log In", key="dlg_goto_login",
+                     type="primary" if mode == "login" else "secondary"):
+            st.session_state.auth_mode = "login"
+            st.rerun()
+    with col_r:
+        if st.button("📝 Register", key="dlg_goto_reg",
+                     type="primary" if mode == "register" else "secondary"):
+            st.session_state.auth_mode = "register"
+            st.rerun()
+
+    st.markdown("<div class='ts-divider'></div>", unsafe_allow_html=True)
+
+    if mode == "login":
+        st.markdown("<p style='text-align:center;color:#7a6e8a;font-style:italic;margin-bottom:1rem;'>Welcome back, Swiftie! ✨</p>", unsafe_allow_html=True)
+        username = st.text_input("Username", key="dlg_login_user", placeholder="your username")
+        password = st.text_input("Password", key="dlg_login_pass", type="password", placeholder="••••••")
+        if st.button("Log In →", key="dlg_btn_login"):
+            if not username or not password:
+                st.error("Please enter both fields.")
             else:
-                st.warning("No history found for that session ID.")
-        else:
-            st.warning("Please paste a Session ID first.")
+                res = login_user(username, password)
+                if res["success"]:
+                    st.session_state.logged_in = True
+                    st.session_state.current_user = res["user"]
+                    sid = str(uuid.uuid4())
+                    st.session_state.session_id = sid
+                    create_session(res["user"]["username"], sid)
+                    st.session_state.messages = []
+                    st.session_state.show_auth = False
+                    st.rerun()
+                else:
+                    st.error(res["error"])
+        st.markdown("<p style='text-align:center;color:#5a5270;font-size:0.82rem;margin-top:1rem;'>No account? Click Register above.</p>", unsafe_allow_html=True)
 
+    else:  # register
+        st.markdown("<p style='text-align:center;color:#7a6e8a;font-style:italic;margin-bottom:1rem;'>Create your Swiftie account 💛</p>", unsafe_allow_html=True)
+        new_user    = st.text_input("Username (letters & numbers only)", key="dlg_reg_user", placeholder="swiftie123")
+        new_display = st.text_input("Display name (optional)", key="dlg_reg_display", placeholder="Taylor's #1 Fan")
+        new_pass    = st.text_input("Password (min 6 chars)", key="dlg_reg_pass", type="password", placeholder="••••••")
+        new_pass2   = st.text_input("Confirm password", key="dlg_reg_pass2", type="password", placeholder="••••••")
+        if st.button("Create Account →", key="dlg_btn_reg"):
+            if not new_user or not new_pass:
+                st.error("Please fill in all required fields.")
+            elif new_pass != new_pass2:
+                st.error("Passwords do not match.")
+            else:
+                res = register_user(new_user, new_pass, new_display)
+                if res["success"]:
+                    st.success("Account created! Logging you in... ✨")
+                    st.session_state.logged_in = True
+                    st.session_state.current_user = res["user"]
+                    sid = str(uuid.uuid4())
+                    st.session_state.session_id = sid
+                    create_session(res["user"]["username"], sid)
+                    st.session_state.messages = []
+                    st.session_state.show_auth = False
+                    st.rerun()
+                else:
+                    st.error(res["error"])
+
+# Show dialog if triggered
+if st.session_state.show_auth and not st.session_state.logged_in:
+    show_auth_dialog()
+
+# ════════════════════════════════════════════════════════════════════════════
+# SIDEBAR
+# ════════════════════════════════════════════════════════════════════════════
+with st.sidebar:
+    st.markdown("## ✨ SwiftieBot")
     st.markdown("---")
 
-    user_msgs = sum(1 for m in st.session_state.messages if m["role"] == "user")
-    st.metric("💬 Messages", f"{user_msgs}")
+    if not st.session_state.logged_in:
+        st.markdown("<p style='color:#7a6e8a;font-size:0.85rem;text-align:center;'>Sign in to save your conversations and contribute facts!</p>", unsafe_allow_html=True)
+        if st.button("🔑 Log In / Register", key="sb_open_auth"):
+            st.session_state.show_auth = True
+            st.rerun()
+    else:
+        # User info
+        st.markdown(f"**👤 {dname()}**")
+        st.caption(f"@{uname()}")
+        st.markdown("---")
+
+        # New chat
+        if st.button("➕ New Chat", key="sb_new_chat"):
+            sid = str(uuid.uuid4())
+            st.session_state.session_id = sid
+            create_session(uname(), sid)
+            st.session_state.messages   = []
+            st.session_state.song_result = None
+            st.rerun()
+
+        # Session history
+        st.markdown("**📂 Recent Chats**")
+        try:
+            sessions = get_user_sessions(uname())
+            for s in sessions[:8]:
+                sid   = s["session_id"]
+                count = s.get("message_count", 0)
+                ts    = s.get("last_updated", s.get("created_at", ""))[:10]
+                is_cur = sid == st.session_state.session_id
+                label  = f"{'🟢 ' if is_cur else ''}💬 {ts} · {count} msg{'s' if count != 1 else ''}"
+                if st.button(label, key=f"sb_sess_{sid}"):
+                    st.session_state.session_id  = sid
+                    st.session_state.messages    = load_messages(uname(), sid)
+                    st.session_state.song_result = None
+                    st.rerun()
+        except Exception:
+            st.caption("Could not load sessions.")
+
+        st.markdown("---")
+
+        # Quick topics
+        st.markdown("**🎵 Quick Topics**")
+        topics = [
+            ("📀 All Albums",    "List all of Taylor Swift's studio albums in order with release years"),
+            ("🏆 Awards",        "What are Taylor Swift's biggest award wins?"),
+            ("🔁 Re-recordings", "Explain Taylor's Version re-recordings — why and which ones?"),
+            ("🌟 Eras Tour",     "Tell me about the Eras Tour setlist and significance"),
+            ("🎼 Best Songs",    "What are considered Taylor Swift's greatest songs of all time?"),
+            ("🥚 Easter Eggs",   "What are some famous Taylor Swift Easter eggs?"),
+        ]
+        for label, prompt in topics:
+            if st.button(label, key=f"sb_topic_{label}"):
+                if not st.session_state.logged_in:
+                    st.session_state.show_auth = True
+                    st.rerun()
+                else:
+                    st.session_state._inject_prompt = prompt
+
+        st.markdown("---")
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("🗑️ Clear", key="sb_clear"):
+                sid = str(uuid.uuid4())
+                st.session_state.session_id = sid
+                create_session(uname(), sid)
+                st.session_state.messages = []
+                st.session_state.song_result = None
+                st.rerun()
+        with col2:
+            if st.button("🚪 Logout", key="sb_logout"):
+                for k in ["logged_in","current_user","messages","song_result","admin_authenticated","_inject_prompt"]:
+                    st.session_state[k] = _defaults.get(k)
+                st.session_state.session_id = str(uuid.uuid4())
+                st.rerun()
+
     st.markdown("---")
+    st.markdown("<small style='color:#3a3050;'>Powered by Groq · Firebase</small>", unsafe_allow_html=True)
 
-    st.markdown("**🎵 Quick Topics**")
-    topics = [
-        ("📀 All Albums", "List all of Taylor Swift's studio albums in order with release years"),
-        ("🏆 Awards", "What are Taylor Swift's biggest award wins?"),
-        ("🔁 Re-recordings", "Explain Taylor's Version re-recordings — why and which ones?"),
-        ("🌟 Eras Tour", "Tell me about the Eras Tour setlist and significance"),
-        ("🎼 Best Songs", "What are considered Taylor Swift's greatest songs of all time?"),
-        ("🥚 Easter Eggs", "What are some famous Taylor Swift Easter eggs and fan theories?"),
-    ]
-    for label, prompt in topics:
-        if st.button(label, key=f"btn_{label}"):
-            st.session_state._inject_prompt = prompt
-
-    st.markdown("---")
-    if st.button("🗑️ Clear Chat"):
-        st.session_state.messages = []
-        st.session_state.session_id = str(uuid.uuid4())
-        create_session(st.session_state.session_id)
-        st.session_state.song_result = None
-        st.rerun()
-
-    st.markdown("---")
-    st.markdown(
-        "<small style='color:#6b7280;'>Powered by Groq AI · Firebase</small>",
-        unsafe_allow_html=True,
-    )
-
-# ── Header ────────────────────────────────────────────────────────────────────
+# ════════════════════════════════════════════════════════════════════════════
+# HEADER
+# ════════════════════════════════════════════════════════════════════════════
 st.markdown("""
 <div class="ts-header">
   <h1>✨ SwiftieBot ✨</h1>
   <p>Your expert guide to Taylor Swift's music, albums & discography</p>
 </div>
+<div class="ts-divider"></div>
 """, unsafe_allow_html=True)
 
-# ── Tabs ──────────────────────────────────────────────────────────────────────
-tab_chat, tab_search = st.tabs(["💬 Chat", "🔍 Song Search"])
+# ════════════════════════════════════════════════════════════════════════════
+# NOT LOGGED IN — HERO SCREEN
+# ════════════════════════════════════════════════════════════════════════════
+if not st.session_state.logged_in:
+    st.markdown("""
+    <div class="hero-section">
+      <div class="hero-icon">🎸</div>
+      <h2>Welcome, Swiftie!</h2>
+      <p>The ultimate Taylor Swift companion.<br>
+         Chat about songs, search the discography, and share your knowledge with the community.</p>
+      <div class="hero-features">
+        <div class="hero-feature"><div class="feat-icon">💬</div><span>AI Chat</span>Ask anything about TS</div>
+        <div class="hero-feature"><div class="feat-icon">🔍</div><span>Song Search</span>Deep song details</div>
+        <div class="hero-feature"><div class="feat-icon">📜</div><span>History</span>All your past chats</div>
+        <div class="hero-feature"><div class="feat-icon">💡</div><span>Contribute</span>Share Swiftie facts</div>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    c1, c2, c3 = st.columns([1, 2, 1])
+    with c2:
+        if st.button("🔑 Get Started — Log In or Register", key="hero_auth_btn"):
+            st.session_state.show_auth = True
+            st.rerun()
+    st.stop()
+
+# ════════════════════════════════════════════════════════════════════════════
+# TABS (logged in only)
+# ════════════════════════════════════════════════════════════════════════════
+is_admin = st.session_state.current_user.get("is_admin", False)
+tab_labels = ["💬 Chat", "🔍 Song Search", "📜 My History", "💡 Contribute"]
+if is_admin:
+    tab_labels.append("🛡️ Admin")
+
+tabs = st.tabs(tab_labels)
+tab_chat, tab_search, tab_history, tab_contribute = tabs[:4]
+tab_admin = tabs[4] if is_admin else None
 
 # ════════════════════════════════════════════════════════════════════════════
 # TAB 1 — CHAT
@@ -389,11 +713,12 @@ with tab_chat:
     if not st.session_state.messages:
         st.markdown("""
         <div class="chip-row">
-          <span class="chip">📀 Discography</span>
+          <span class="chip">📀 All albums</span>
           <span class="chip">🎵 Song meanings</span>
           <span class="chip">🔁 Taylor's Version</span>
           <span class="chip">🌟 Eras Tour</span>
           <span class="chip">🥚 Easter eggs</span>
+          <span class="chip">🏆 Awards</span>
         </div>
         """, unsafe_allow_html=True)
 
@@ -402,180 +727,272 @@ with tab_chat:
         with st.chat_message(msg["role"], avatar=avatar):
             st.markdown(msg["content"])
 
-    # Sidebar topic injection
-    if hasattr(st.session_state, "_inject_prompt") and st.session_state._inject_prompt:
-        prompt = st.session_state._inject_prompt
-        st.session_state._inject_prompt = None
-
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        save_message(st.session_state.session_id, "user", prompt)
-
+    def _send(user_text: str):
+        st.session_state.messages.append({"role": "user", "content": user_text})
+        save_message(uname(), st.session_state.session_id, "user", user_text)
         with st.chat_message("user", avatar="🎀"):
-            st.markdown(prompt)
-
-        with st.chat_message("assistant", avatar="🎸"):
-            with st.spinner("Thinking like a Swiftie..."):
-                reply = groq_chat(
-                    CHAT_SYSTEM_PROMPT,
-                    st.session_state.messages,
-                    prompt,
-                )
-            st.markdown(reply)
-
-        st.session_state.messages.append({"role": "assistant", "content": reply})
-        save_message(st.session_state.session_id, "assistant", reply)
-        st.rerun()
-
-    if prompt := st.chat_input("Ask me anything about Taylor Swift..."):
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        save_message(st.session_state.session_id, "user", prompt)
-
-        with st.chat_message("user", avatar="🎀"):
-            st.markdown(prompt)
-
+            st.markdown(user_text)
         with st.chat_message("assistant", avatar="🎸"):
             with st.spinner("✨ Searching the Swiftie archives..."):
-                reply = groq_chat(
-                    CHAT_SYSTEM_PROMPT,
-                    st.session_state.messages,
-                    prompt,
-                )
+                reply = groq_chat(st.session_state.messages, user_text)
             st.markdown(reply)
-
         st.session_state.messages.append({"role": "assistant", "content": reply})
-        save_message(st.session_state.session_id, "assistant", reply)
+        save_message(uname(), st.session_state.session_id, "assistant", reply)
+
+    if st.session_state._inject_prompt:
+        prompt = st.session_state._inject_prompt
+        st.session_state._inject_prompt = None
+        _send(prompt)
+        st.rerun()
+
+    if user_input := st.chat_input("Ask me anything about Taylor Swift..."):
+        _send(user_input)
 
 # ════════════════════════════════════════════════════════════════════════════
 # TAB 2 — SONG SEARCH
 # ════════════════════════════════════════════════════════════════════════════
 with tab_search:
-    st.markdown("### 🔍 Search a Song")
-    st.markdown(
-        "<p style='color:#a89bc2;font-size:0.88rem;'>Type any Taylor Swift song title to get full details, "
-        "themes, songwriting story, and an iconic line.</p>",
-        unsafe_allow_html=True,
-    )
+    st.markdown("### 🔍 Song Search")
+    st.markdown("<p style='color:#7a6e8a;font-size:0.88rem;'>Search any Taylor Swift song for full details — themes, story, writers, chart stats, and an iconic line.</p>", unsafe_allow_html=True)
 
     ALBUMS = [
-        "Any album",
-        "Taylor Swift (2006)",
-        "Fearless (2008)",
-        "Speak Now (2010)",
-        "Red (2012)",
-        "1989 (2014)",
-        "reputation (2017)",
-        "Lover (2019)",
-        "folklore (2020)",
-        "evermore (2020)",
-        "Midnights (2022)",
+        "Any album","Taylor Swift (2006)","Fearless (2008)","Speak Now (2010)",
+        "Red (2012)","1989 (2014)","reputation (2017)","Lover (2019)",
+        "folklore (2020)","evermore (2020)","Midnights (2022)",
         "The Tortured Poets Department (2024)",
-        "Fearless (Taylor's Version)",
-        "Red (Taylor's Version)",
-        "Speak Now (Taylor's Version)",
-        "1989 (Taylor's Version)",
+        "Fearless (Taylor's Version)","Red (Taylor's Version)",
+        "Speak Now (Taylor's Version)","1989 (Taylor's Version)",
     ]
 
     col1, col2 = st.columns([2, 1])
     with col1:
-        song_query = st.text_input("Song title", placeholder="e.g. All Too Well, Cruel Summer, Fearless...")
+        song_query = st.text_input("Song title", placeholder="e.g. All Too Well, Cruel Summer, Anti-Hero...")
     with col2:
         album_filter = st.selectbox("Filter by album", ALBUMS)
 
-    search_clicked = st.button("🔍 Search Song", key="search_song_btn")
-
-    if search_clicked and song_query.strip():
-        filter_text = f" (from the album: {album_filter})" if album_filter != "Any album" else ""
-        search_prompt = f"Search for Taylor Swift song: '{song_query}'{filter_text}"
-
+    if st.button("🔍  Search", key="search_btn") and song_query.strip():
+        ftext = f" from album: {album_filter}" if album_filter != "Any album" else ""
         with st.spinner("✨ Looking up song details..."):
-            import json as _json
-            raw = groq_once(SONG_SEARCH_PROMPT, search_prompt).strip()
-
-            # Strip any accidental markdown fences
+            raw = groq_once(f"Search for Taylor Swift song: '{song_query}'{ftext}").strip()
             if raw.startswith("```"):
                 raw = raw.split("```")[1]
-                if raw.startswith("json"):
-                    raw = raw[4:]
+                if raw.startswith("json"): raw = raw[4:]
             raw = raw.strip()
-
             try:
                 result = _json.loads(raw)
                 st.session_state.song_result = result
-                save_search(
-                    st.session_state.session_id,
-                    song_query,
-                    album_filter if album_filter != "Any album" else None,
-                    result,
-                )
+                save_search(uname(), st.session_state.session_id, song_query,
+                            album_filter if album_filter != "Any album" else None, result)
             except Exception:
-                st.session_state.song_result = {
-                    "found": False,
-                    "message": "Sorry, I had trouble parsing that result. Try again!",
-                }
+                st.session_state.song_result = {"found": False, "message": "Couldn't parse result. Please try again!"}
 
-    # ── Display result ────────────────────────────────────────────────────────
     result = st.session_state.song_result
-
     if result:
         if not result.get("found"):
-            st.warning(f"🎵 {result.get('message', 'Song not found. Try a different spelling!')}")
+            st.warning(f"🎵 {result.get('message','Song not found. Try a different spelling!')}")
         else:
+            # Song header card
             st.markdown(f"""
             <div class="song-card">
-                <h3>🎵 {result.get('song_title', '')}</h3>
-                <span class="album-tag">💿 {result.get('album', '')} · {result.get('year', '')}</span>
-                <hr style="border-color:rgba(212,175,55,0.15);margin:0.8rem 0;">
-                <p style="font-style:italic;font-size:1.05rem;color:#f5e6a3;margin-bottom:0.2rem;">
-                    "{result.get('lyric_snippet', '')}"
-                </p>
-            </div>
-            """, unsafe_allow_html=True)
+                <h3>🎵 {result.get('song_title','')}</h3>
+                <span class="album-tag">💿 {result.get('album','')} · {result.get('year','')}</span>
+                <div class="lyric-line">"{result.get('lyric_snippet','')}"</div>
+            </div>""", unsafe_allow_html=True)
 
+            # Details grid
             c1, c2 = st.columns(2)
             with c1:
-                st.markdown("**✍️ Songwriters**")
-                st.markdown(f"<p style='color:#e8d5b7'>{result.get('writers','Unknown')}</p>", unsafe_allow_html=True)
-                st.markdown("**🎛️ Producers**")
-                st.markdown(f"<p style='color:#e8d5b7'>{result.get('producers','Unknown')}</p>", unsafe_allow_html=True)
-                st.markdown("**⏱️ Duration**")
-                st.markdown(f"<p style='color:#e8d5b7'>{result.get('duration','Unknown')}</p>", unsafe_allow_html=True)
+                for label, key in [("✍️ Songwriters","writers"),("🎛️ Producers","producers"),("⏱️ Duration","duration")]:
+                    st.markdown(f"<p class='info-label'>{label}</p><p class='info-value'>{result.get(key,'Unknown')}</p>", unsafe_allow_html=True)
             with c2:
-                st.markdown("**📊 Chart Peak**")
-                st.markdown(f"<p style='color:#e8d5b7'>{result.get('chart_peak','Unknown')}</p>", unsafe_allow_html=True)
-                st.markdown("**🏅 Certifications**")
-                st.markdown(f"<p style='color:#e8d5b7'>{result.get('certifications','Unknown')}</p>", unsafe_allow_html=True)
-                st.markdown("**🌐 Era**")
-                st.markdown(f"<p style='color:#e8d5b7'>{result.get('era','Unknown')}</p>", unsafe_allow_html=True)
+                for label, key in [("📊 Chart Peak","chart_peak"),("🏅 Certifications","certifications"),("🌐 Era","era")]:
+                    st.markdown(f"<p class='info-label'>{label}</p><p class='info-value'>{result.get(key,'Unknown')}</p>", unsafe_allow_html=True)
 
-            st.markdown("---")
-            st.markdown("**🎭 Themes & Mood**")
-            st.markdown(f"<p style='color:#e8d5b7'>{result.get('themes','')}</p>", unsafe_allow_html=True)
-
-            st.markdown("**📖 Songwriting Story**")
-            st.markdown(f"<p style='color:#e8d5b7'>{result.get('story','')}</p>", unsafe_allow_html=True)
-
-            st.markdown("**🌟 Iconic Moment**")
-            st.markdown(f"<p style='color:#e8d5b7'>{result.get('iconic_moment','')}</p>", unsafe_allow_html=True)
-
-            st.markdown("**🥚 Fun Fact**")
-            st.markdown(
-                f"<p style='color:#e8d5b7;background:rgba(212,175,55,0.08);border-left:3px solid #d4af37;"
-                f"padding:0.6rem 1rem;border-radius:0 8px 8px 0;'>{result.get('fun_fact','')}</p>",
-                unsafe_allow_html=True,
-            )
-
-            st.markdown("---")
-            st.markdown(
-                "<p style='color:#a89bc2;font-size:0.85rem;'>💬 Want to dive deeper? Switch to the Chat tab and ask SwiftieBot anything about this song!</p>",
-                unsafe_allow_html=True,
-            )
+            st.markdown(f"""
+            <div class="section-block"><h4>🎭 Themes & Mood</h4><p>{result.get('themes','')}</p></div>
+            <div class="section-block"><h4>📖 Songwriting Story</h4><p>{result.get('story','')}</p></div>
+            <div class="section-block"><h4>🌟 Iconic Moment</h4><p>{result.get('iconic_moment','')}</p></div>
+            <div class="fun-fact-block"><p>{result.get('fun_fact','')}</p></div>
+            """, unsafe_allow_html=True)
+            st.markdown("<p style='color:#5a5270;font-size:0.82rem;text-align:center;'>💬 Switch to the Chat tab to ask more about this song!</p>", unsafe_allow_html=True)
     else:
         st.markdown("""
-        <div style="text-align:center;padding:3rem 1rem;color:#6b5e8a;">
-            <div style="font-size:3rem;margin-bottom:1rem;">🎸</div>
-            <p style="font-size:1rem;">Search any Taylor Swift song above to see<br>full details, themes, and songwriting story.</p>
-            <p style="font-size:0.82rem;margin-top:0.5rem;color:#4a4060;">
-                Try: All Too Well · Cruel Summer · Anti-Hero · Love Story · Shake It Off
-            </p>
-        </div>
-        """, unsafe_allow_html=True)
+        <div style="text-align:center;padding:3rem 1rem;">
+          <div style="font-size:3rem;margin-bottom:1rem;opacity:0.5;">🎸</div>
+          <p style="color:#5a4e6a;">Search any Taylor Swift song above.</p>
+          <p style="font-size:0.82rem;color:#3a3050;">Try: All Too Well · Cruel Summer · Anti-Hero · Love Story · Shake It Off</p>
+        </div>""", unsafe_allow_html=True)
+
+# ════════════════════════════════════════════════════════════════════════════
+# TAB 3 — MY HISTORY
+# ════════════════════════════════════════════════════════════════════════════
+with tab_history:
+    st.markdown("### 📜 My Chat History")
+    st.markdown("<p style='color:#7a6e8a;font-size:0.88rem;'>All your SwiftieBot conversations. Load any session to continue it.</p>", unsafe_allow_html=True)
+
+    try:
+        sessions = get_user_sessions(uname())
+    except Exception as e:
+        st.error(f"Could not load history: {e}")
+        sessions = []
+
+    if not sessions:
+        st.markdown("""
+        <div style="text-align:center;padding:3rem 1rem;">
+          <div style="font-size:2.5rem;margin-bottom:0.8rem;opacity:0.5;">💬</div>
+          <p style="color:#5a4e6a;">No chat history yet.<br>Start chatting in the Chat tab!</p>
+        </div>""", unsafe_allow_html=True)
+    else:
+        st.markdown(f"<p style='color:#7a6e8a;font-size:0.82rem;'>{len(sessions)} session(s) found.</p>", unsafe_allow_html=True)
+        for i, sess in enumerate(sessions):
+            sid      = sess.get("session_id", "")
+            count    = sess.get("message_count", 0)
+            ts       = sess.get("last_updated", sess.get("created_at",""))[:19].replace("T"," ")
+            is_cur   = sid == st.session_state.session_id
+            cur_badge = " 🟢 current" if is_cur else ""
+
+            col_info, col_load, col_del = st.columns([5, 1.5, 1])
+            with col_info:
+                card_cls = "history-card current" if is_cur else "history-card"
+                st.markdown(f"""
+                <div class="{card_cls}">
+                  <div class="h-id">Session {sid[:8]}…{cur_badge}</div>
+                  <div class="h-meta">🕐 {ts} &nbsp;·&nbsp; 💬 {count} message{'s' if count!=1 else ''}</div>
+                </div>""", unsafe_allow_html=True)
+            with col_load:
+                if not is_cur and st.button("Load", key=f"load_{i}"):
+                    hist = get_user_session_history(uname(), sid)
+                    if hist:
+                        st.session_state.session_id = sid
+                        st.session_state.messages   = hist
+                        st.session_state.song_result = None
+                        st.success(f"Loaded {len(hist)} messages!")
+                        st.rerun()
+                    else:
+                        st.warning("No messages in this session.")
+            with col_del:
+                if st.button("🗑️", key=f"del_{i}", help="Delete this session"):
+                    delete_user_session(uname(), sid)
+                    if sid == st.session_state.session_id:
+                        new_sid = str(uuid.uuid4())
+                        st.session_state.session_id = new_sid
+                        st.session_state.messages = []
+                        create_session(uname(), new_sid)
+                    st.rerun()
+
+# ════════════════════════════════════════════════════════════════════════════
+# TAB 4 — CONTRIBUTE
+# ════════════════════════════════════════════════════════════════════════════
+with tab_contribute:
+    st.markdown("### 💡 Contribute a Taylor Swift Fact")
+    st.markdown("<p style='color:#7a6e8a;font-size:0.88rem;'>Share something you know! Approved facts get added to SwiftieBot's knowledge and used when answering other users.</p>", unsafe_allow_html=True)
+
+    CATEGORIES = ["song","album","tour","personal","award","easter_egg","other"]
+
+    with st.form("contribute_form", clear_on_submit=True):
+        fc1, fc2 = st.columns([1, 2])
+        with fc1:
+            cat = st.selectbox("Category", CATEGORIES)
+        with fc2:
+            title = st.text_input("Short title / summary", placeholder="e.g. Hidden message in 1989 booklet")
+        content = st.text_area("Full fact", height=120,
+                               placeholder="Describe the fact in detail — the more context, the better!")
+        submitted = st.form_submit_button("✨ Submit Fact")
+        if submitted:
+            if not title.strip() or not content.strip():
+                st.error("Please fill in both the title and the fact.")
+            elif len(content.strip()) < 20:
+                st.error("Please add more detail (at least 20 characters).")
+            else:
+                try:
+                    submit_community_fact(uname(), cat, title.strip(), content.strip())
+                    st.success("🎉 Submitted! An admin will review it shortly. Thank you, Swiftie!")
+                except Exception as e:
+                    st.error(f"Submission failed: {e}")
+
+    st.markdown("---")
+    st.markdown("### ✅ Approved Community Facts")
+    st.markdown("<p style='color:#7a6e8a;font-size:0.85rem;'>These facts are now part of SwiftieBot's knowledge base.</p>", unsafe_allow_html=True)
+
+    try:
+        approved = get_community_facts("approved")
+    except Exception:
+        approved = []
+
+    if not approved:
+        st.markdown("<p style='color:#3a3050;text-align:center;padding:1.5rem;'>No approved facts yet. Be the first to contribute! 🌟</p>", unsafe_allow_html=True)
+    else:
+        for fact in approved[:20]:
+            st.markdown(f"""
+            <div class="fact-card">
+              <span class="fact-cat">{fact.get('category','').upper()}</span>
+              <div class="fact-title">{fact.get('title','')}</div>
+              <div class="fact-content">{fact.get('content','')}</div>
+              <div class="fact-meta">By @{fact.get('username','')} · {fact.get('submitted_at','')[:10]}</div>
+            </div>""", unsafe_allow_html=True)
+
+# ════════════════════════════════════════════════════════════════════════════
+# TAB 5 — ADMIN
+# ════════════════════════════════════════════════════════════════════════════
+if is_admin and tab_admin is not None:
+    with tab_admin:
+        st.markdown("### 🛡️ Admin Panel")
+
+        if not st.session_state.admin_authenticated:
+            st.markdown("<p style='color:#7a6e8a;'>Enter the admin password to continue.</p>", unsafe_allow_html=True)
+            apw = st.text_input("Admin password", type="password", key="admin_pw_input")
+            if st.button("🔓 Unlock", key="btn_unlock"):
+                if apw == ADMIN_PW:
+                    st.session_state.admin_authenticated = True
+                    st.rerun()
+                else:
+                    st.error("Wrong password.")
+        else:
+            st.success("🔓 Admin access granted")
+            st.markdown("---")
+
+            # Stats
+            try:
+                n_approved = len(get_community_facts("approved"))
+                n_pending  = len(get_community_facts("pending"))
+                n_rejected = len(get_community_facts("rejected"))
+                c1, c2, c3 = st.columns(3)
+                c1.metric("✅ Approved", n_approved)
+                c2.metric("⏳ Pending",  n_pending)
+                c3.metric("❌ Rejected", n_rejected)
+            except Exception:
+                pass
+
+            st.markdown("---")
+            st.markdown("#### 📥 Pending Submissions")
+
+            try:
+                pending = get_community_facts("pending")
+            except Exception as e:
+                st.error(f"Could not load pending facts: {e}")
+                pending = []
+
+            if not pending:
+                st.info("No pending submissions. ✨")
+            else:
+                for fact in pending:
+                    fid = fact.get("id","")
+                    st.markdown(f"""
+                    <div class="fact-card pending">
+                      <span class="fact-cat" style="background:rgba(255,165,0,0.12);border-color:rgba(255,165,0,0.35);color:#ffa500;">{fact.get('category','').upper()}</span>
+                      <div class="fact-title">{fact.get('title','')}</div>
+                      <div class="fact-content">{fact.get('content','')}</div>
+                      <div class="fact-meta">By @{fact.get('username','')} · submitted {fact.get('submitted_at','')[:10]}</div>
+                    </div>""", unsafe_allow_html=True)
+                    ca, cr, _ = st.columns([1.5, 1.5, 4])
+                    with ca:
+                        if st.button("✅ Approve", key=f"app_{fid}"):
+                            review_community_fact(fid, "approved", uname())
+                            st.success("Approved!")
+                            st.rerun()
+                    with cr:
+                        if st.button("❌ Reject", key=f"rej_{fid}"):
+                            review_community_fact(fid, "rejected", uname())
+                            st.warning("Rejected.")
+                            st.rerun()
+                    st.markdown("<hr>", unsafe_allow_html=True)
