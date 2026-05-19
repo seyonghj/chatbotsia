@@ -253,13 +253,15 @@ def save_search(
 
     db.collection("song_searches").document(cache_key).set(payload, merge=True)
 
-
 def search_saved_searches(query: str, album_filter=None):
     """
     Check the GLOBAL song cache for a prior AI result.
+    Tries exact key first, then a broader Firestore query on query_lower.
     Returns the stored result dict if found and valid, else None.
     """
     query_lower = query.strip().lower()
+
+    # 1. Exact key match (with album filter)
     cache_key = query_lower
     if album_filter:
         cache_key += "__" + album_filter.lower().replace(" ", "_")
@@ -273,7 +275,7 @@ def search_saved_searches(query: str, album_filter=None):
     except Exception:
         pass
 
-    # Fallback: try without album filter in case broader match exists
+    # 2. Exact key match (without album filter)
     if album_filter:
         try:
             doc = db.collection("song_searches").document(query_lower).get()
@@ -284,8 +286,23 @@ def search_saved_searches(query: str, album_filter=None):
         except Exception:
             pass
 
-    return None
+    # 3. Broad query — find any cached doc whose query_lower contains the search term
+    try:
+        docs = (
+            db.collection("song_searches")
+            .where("query_lower", ">=", query_lower)
+            .where("query_lower", "<=", query_lower + "\uf8ff")
+            .limit(5)
+            .stream()
+        )
+        for doc in docs:
+            result = doc.to_dict().get("result", {})
+            if result.get("found"):
+                return result
+    except Exception:
+        pass
 
+    return None
 
 def get_approved_facts_for_song(query: str) -> list:
     """
