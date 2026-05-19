@@ -9,6 +9,13 @@ from firebase_client import (
     search_saved_searches, get_approved_facts_for_song,
     submit_community_fact, get_community_facts,
     review_community_fact, get_approved_facts_for_prompt,
+    search_facts_by_nlp,
+)
+from nlp_engine import (
+    detect_intent,
+    extract_entities,
+    build_facts_context,
+    expand_song_query,
 )
 
 # ── Page config ───────────────────────────────────────────────────────────────
@@ -385,84 +392,98 @@ If not found: {"found": false, "message": "brief helpful message"}
 Return ONLY the JSON."""
 
 
-# ── Song hint extraction ──────────────────────────────────────────────────────
-def _extract_song_hint(text: str) -> str | None:
-    """
-    Lightweight heuristic to detect a song name in the user message.
-    Checks quoted titles first, then common phrasing patterns.
-    Returns lowercase hint string or None.
-    """
-    # Quoted title: "All Too Well" or 'Cruel Summer'
-    m = re.search(r'["\'](.+?)["\']', text)
-    if m:
-        return m.group(1).lower().strip()
+# ════════════════════════════════════════════════════════════════════════════
+# NLP-POWERED SYSTEM PROMPT BUILDER
+# ════════════════════════════════════════════════════════════════════════════
 
-    # Patterns like: "about Anti-Hero", "song called Fearless", "lyrics to Love Story"
-    m = re.search(
-        r'(?:about|song|track|called|named|tell me about|lyrics?\s+(?:to|for|of)?)\s+([A-Z][^?.!,\n]{2,40})',
-        text,
-    )
-    if m:
-        return m.group(1).strip().lower()
-
-    return None
+# Cache approved facts in session so we don't hit Firestore on every keystroke.
+# Refreshed once per session (cleared on new chat / logout).
+def _get_cached_facts() -> list:
+    """Load all approved facts once per Streamlit session, cache in session_state."""
+    if "nlp_facts_cache" not in st.session_state:
+        try:
+            st.session_state.nlp_facts_cache = get_community_facts("approved")
+        except Exception:
+            st.session_state.nlp_facts_cache = []
+    return st.session_state.nlp_facts_cache
 
 
-# ── System prompt builder ─────────────────────────────────────────────────────
 def build_system_prompt(user_msg: str = "") -> str:
     """
-    Build the full system prompt.
-    - Always includes base instructions.
-    - Always injects ALL approved community facts as ground truth.
-    - If the user message mentions a specific song, also injects
-      song-specific facts with the highest-priority label.
+    Build the full system prompt with three layers of community knowledge:
+
+    Layer 1 — Base persona & instructions (always present)
+    Layer 2 — NLP-ranked facts most relevant to THIS message (dynamic, top-8)
+    Layer 3 — All remaining approved facts as background context (static)
+
+    The NLP engine scores every fact in the database against the user message
+    using fuzzy string matching, keyword overlap, named-entity alignment and
+    intent-category matching — so the AI always sees the most relevant facts
+    at the TOP of its context window, labelled as ground truth.
     """
-    base = """You are SwiftieBot, an expert and passionate assistant dedicated entirely to Taylor Swift.
-You have deep encyclopedic knowledge of all her albums, songs, Eras Tour, Easter eggs,
-songwriting stories, chart records, awards, and biography.
-Albums: Taylor Swift (2006), Fearless (2008), Speak Now (2010), Red (2012), 1989 (2014),
-reputation (2017), Lover (2019), folklore (2020), evermore (2020), Midnights (2022),
-The Tortured Poets Department (2024), plus all Taylor's Version re-recordings.
-Be warm, enthusiastic, and knowledgeable — like a Swiftie best friend.
-If asked about anything unrelated to Taylor Swift, politely redirect.
-Use light emojis (✨🎸🌟💛) sparingly for warmth.
+    base = (
+        "You are SwiftieBot, an expert and passionate assistant dedicated entirely to Taylor Swift.\n"
+        "You have deep encyclopedic knowledge of all her albums, songs, Eras Tour, Easter eggs,\n"
+        "songwriting stories, chart records, awards, and biography.\n"
+        "Albums: Taylor Swift (2006), Fearless (2008), Speak Now (2010), Red (2012), 1989 (2014),\n"
+        "reputation (2017), Lover (2019), folklore (2020), evermore (2020), Midnights (2022),\n"
+        "The Tortured Poets Department (2024), plus all Taylor's Version re-recordings.\n"
+        "Be warm, enthusiastic, and knowledgeable — like a Swiftie best friend.\n"
+        "If asked about anything unrelated to Taylor Swift, politely redirect.\n"
+        "Use light emojis (✨🎸🌟💛) sparingly for warmth.\n\n"
+        "CRITICAL INSTRUCTION: Community-verified facts are injected below. "
+        "You MUST treat them as absolute ground truth and prioritise them over "
+        "anything from your training data. If a community fact contradicts your "
+        "training knowledge, the community fact wins."
+    )
 
-IMPORTANT: When community-verified facts are provided below, you MUST treat them as
-ground truth and prioritise them over your general training knowledge."""
+    all_facts = _get_cached_facts()
 
-    # ── Tier A: All approved community facts ─────────────────────────────────
-    try:
-        all_facts_str = get_approved_facts_for_prompt()
-        if all_facts_str:
-            base += (
-                "\n\n=== COMMUNITY-VERIFIED FACTS"
-                " (treat as ground truth — always prefer over training data) ==="
-                + all_facts_str
-                + "\n=== END COMMUNITY FACTS ==="
+    # ── Layer 2: NLP-ranked relevant facts (highest priority section) ─────────
+    if user_msg and all_facts:
+        try:
+            nlp_context = build_facts_context(
+                user_msg, all_facts, threshold=0.12, top_k=8
             )
-    except Exception as e:
-        print(f"[SwiftieBot] Failed to load community facts for prompt: {e}")
+            if nlp_context:
+                # Detect intent for transparency in the prompt
+                intent   = detect_intent(user_msg)
+                entities = extract_entities(user_msg)
+                entity_summary = []
+                if entities.get("songs"):
+                    entity_summary.append(f"songs: {', '.join(entities['songs'][:2])}")
+                if entities.get("albums"):
+                    entity_summary.append(f"albums: {', '.join(entities['albums'][:2])}")
+                if entities.get("eras"):
+                    entity_summary.append(f"eras: {', '.join(entities['eras'][:2])}")
+                ent_str = f" | detected entities — {'; '.join(entity_summary)}" if entity_summary else ""
 
-    # ── Tier B: Song-specific facts (highest priority) ────────────────────────
-    if user_msg:
-        hint = _extract_song_hint(user_msg)
-        if hint:
-            try:
-                song_facts = get_approved_facts_for_song(hint)
-                if song_facts:
-                    lines = "\n".join(
-                        f"  • [{f.get('category', '').upper()}] "
-                        f"{f.get('title', '')}: {f.get('content', '')}"
-                        for f in song_facts
-                    )
-                    base += (
-                        f"\n\n=== SONG-SPECIFIC COMMUNITY FACTS FOR '{hint.title()}'"
-                        f" (HIGHEST PRIORITY — override everything else) ===\n"
-                        + lines
-                        + "\n=== END SONG-SPECIFIC FACTS ==="
-                    )
-            except Exception as e:
-                print(f"[SwiftieBot] Failed to load song-specific facts: {e}")
+                base += (
+                    f"\n\n[NLP RETRIEVAL: intent={intent}{ent_str}]"
+                    + nlp_context
+                )
+        except Exception as e:
+            print(f"[SwiftieBot] NLP context build failed: {e}")
+
+    # ── Layer 3: All remaining approved facts (background context) ────────────
+    if all_facts:
+        try:
+            # Build a concise background block (different from NLP-ranked block above)
+            background_lines = []
+            for f in all_facts:
+                cat     = f.get("category", "general").upper()
+                title   = f.get("title",   "")
+                content = f.get("content", "")
+                background_lines.append(f"  • [{cat}] {title}: {content}")
+
+            if background_lines:
+                base += (
+                    "\n\n=== ALL COMMUNITY KNOWLEDGE BASE ==="
+                    "\n" + "\n".join(background_lines) +
+                    "\n=== END KNOWLEDGE BASE ==="
+                )
+        except Exception as e:
+            print(f"[SwiftieBot] Background facts failed: {e}")
 
     return base
 
@@ -470,12 +491,14 @@ ground truth and prioritise them over your general training knowledge."""
 # ── Groq helpers ──────────────────────────────────────────────────────────────
 def groq_chat(history: list, user_msg: str) -> str:
     """
-    Send a chat message to Groq.
-    The system prompt is built fresh each call so community facts are always current,
-    and song-specific facts are injected when the user asks about a specific song.
+    Send a chat message to Groq with NLP-enhanced system prompt.
+    The system prompt is rebuilt on every call so:
+      - NLP retrieval always matches the current user message
+      - Newly approved community facts are picked up within the session
     """
     msgs = [{"role": "system", "content": build_system_prompt(user_msg)}]
-    for m in history[:-1] if history and history[-1]["role"] == "user" else history:
+    # Pass history excluding the message we're about to append
+    for m in history:
         msgs.append({"role": m["role"], "content": m["content"]})
     msgs.append({"role": "user", "content": user_msg})
 
@@ -631,6 +654,7 @@ with st.sidebar:
             create_session(uname(), sid)
             st.session_state.messages    = []
             st.session_state.song_result = None
+            st.session_state.pop("nlp_facts_cache", None)   # refresh facts on next message
             st.rerun()
 
         st.markdown("**📂 Recent Chats**")
@@ -677,11 +701,13 @@ with st.sidebar:
                 create_session(uname(), sid)
                 st.session_state.messages    = []
                 st.session_state.song_result = None
+                st.session_state.pop("nlp_facts_cache", None)
                 st.rerun()
         with col2:
             if st.button("🚪 Logout", key="sb_logout"):
                 for k in ["logged_in", "current_user", "messages", "song_result",
-                          "song_result_source", "admin_authenticated", "_inject_prompt"]:
+                          "song_result_source", "admin_authenticated", "_inject_prompt",
+                          "nlp_facts_cache"]:
                     st.session_state[k] = _defaults.get(k)
                 st.session_state.session_id = str(uuid.uuid4())
                 st.rerun()
@@ -820,15 +846,40 @@ with tab_search:
         af = album_filter if album_filter != "Any album" else None
         q  = song_query.strip()
 
-        # ── Tier 1: community facts (highest priority) ────────────────────────
-        with st.spinner("💡 Checking community knowledge..."):
-            facts = get_approved_facts_for_song(q.lower())
+        # ── NLP: expand query with fuzzy correction ───────────────────────────
+        candidates = expand_song_query(q)
+        # Primary search key = best NLP candidate (first = original, rest = fuzzy suggestions)
+        primary_q  = candidates[0]
+
+        # ── Tier 1: NLP-ranked community facts (highest priority) ─────────────
+        with st.spinner("🧠 Running NLP search through community knowledge..."):
+            # Try each candidate until we get a match
+            facts = []
+            matched_candidate = primary_q
+            for candidate in candidates:
+                facts = get_approved_facts_for_song(candidate.lower())
+                if facts:
+                    matched_candidate = candidate
+                    break
 
         if facts:
-            facts_text = " | ".join(f.get("content", "") for f in facts[:3])
+            # Sort by NLP score if present
+            facts_sorted = sorted(facts, key=lambda x: x.get("_nlp_score", 0), reverse=True)
+            best_fact    = facts_sorted[0]
+
+            # Build rich themes text from top-3 facts
+            themes_parts = []
+            for f in facts_sorted[:3]:
+                themes_parts.append(f"[{f.get('category','').upper()}] {f.get('title','')}: {f.get('content','')}")
+            facts_text = " ✦ ".join(themes_parts)
+
+            # Show NLP correction notice if the query was auto-corrected
+            if matched_candidate.lower() != q.lower():
+                st.info(f"🧠 NLP matched your query to: **{matched_candidate.title()}**")
+
             st.session_state.song_result = {
                 "found":           True,
-                "song_title":      q.title(),
+                "song_title":      matched_candidate.title() if matched_candidate != primary_q else q.title(),
                 "album":           af or "See community facts below",
                 "year":            "—",
                 "era":             "—",
@@ -838,18 +889,24 @@ with tab_search:
                 "chart_peak":      "—",
                 "certifications":  "—",
                 "themes":          facts_text,
-                "story":           "Assembled from community-contributed facts.",
+                "story":           f"Assembled from {len(facts)} community-contributed fact(s). "
+                                   f"Top match score: {best_fact.get('_nlp_score', 'n/a')}",
                 "iconic_moment":   "—",
                 "lyric_snippet":   "From the Swiftie community knowledge base",
-                "fun_fact":        facts[0].get("content", "—"),
+                "fun_fact":        best_fact.get("content", "—"),
                 "_from_community": True,
+                "_fact_count":     len(facts),
             }
             st.session_state.song_result_source = "community"
 
         else:
             # ── Tier 2: global Firestore cache ────────────────────────────────
             with st.spinner("⚡ Checking saved knowledge..."):
-                cached = search_saved_searches(q.lower(), af)
+                cached = None
+                for candidate in candidates:
+                    cached = search_saved_searches(candidate.lower(), af)
+                    if cached:
+                        break
 
             if cached:
                 st.session_state.song_result        = cached
@@ -858,8 +915,10 @@ with tab_search:
             else:
                 # ── Tier 3: Groq AI ───────────────────────────────────────────
                 ftext = f" from album: {af}" if af else ""
+                # Use NLP best candidate for the AI query too
+                ai_q  = candidates[0]
                 with st.spinner("🤖 Asking the AI for details..."):
-                    raw = groq_once(f"Search for Taylor Swift song: '{q}'{ftext}")
+                    raw = groq_once(f"Search for Taylor Swift song: '{ai_q}'{ftext}")
                 try:
                     result = _parse_groq_json(raw)
                 except Exception:
@@ -871,7 +930,7 @@ with tab_search:
                 # Cache successful AI result for all future users
                 if result.get("found"):
                     try:
-                        save_search(uname(), st.session_state.session_id, q, af, result)
+                        save_search(uname(), st.session_state.session_id, ai_q, af, result)
                     except Exception:
                         pass
 
