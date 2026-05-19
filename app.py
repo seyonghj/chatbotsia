@@ -733,37 +733,43 @@ with tab_search:
         song_query = st.text_input("Song title", placeholder="e.g. All Too Well, Cruel Summer, Anti-Hero...")
     with col2:
         album_filter = st.selectbox("Filter by album", ALBUMS)
-
-    if st.button("🔍  Search", key="search_btn") and song_query.strip():
+if st.button("🔍  Search", key="search_btn") and song_query.strip():
         af = album_filter if album_filter != "Any album" else None
         q  = song_query.strip()
 
-        # ── Tier 1: community facts (highest priority) ────────────────────────
-        with st.spinner("💡 Checking community knowledge..."):
-            facts = get_approved_facts_for_song(q.lower())
+        # ── Always load all approved community facts first ────────────────
+        with st.spinner("💡 Loading community knowledge..."):
+            try:
+                all_facts = get_community_facts("approved")
+            except Exception:
+                all_facts = []
 
-        if facts:
-            facts_text = " | ".join(f.get("content", "") for f in facts[:3])
-            st.session_state.song_result = {
-                "found":           True,
-                "song_title":      q.title(),
-                "album":           af or "See community facts below",
-                "year":            "—",
-                "era":             "—",
-                "writers":         "—",
-                "producers":       "—",
-                "duration":        "—",
-                "chart_peak":      "—",
-                "certifications":  "—",
-                "themes":          facts_text,
-                "story":           "Assembled from community-contributed facts.",
-                "iconic_moment":   "—",
-                "lyric_snippet":   "From the Swiftie community knowledge base",
-                "fun_fact":        facts[0].get("content", "—"),
-                "_from_community": True,
-            }
-            st.session_state.song_result_source = "community"
+        # ── Then get song details from cache or AI ────────────────────────
+        with st.spinner("⚡ Checking saved knowledge..."):
+            cached = search_saved_searches(q.lower(), af)
 
+        if cached:
+            st.session_state.song_result        = cached
+            st.session_state.song_result_source = "cache"
+        else:
+            ftext = f" from album: {af}" if af else ""
+            with st.spinner("🤖 Asking the AI for details..."):
+                raw = groq_once(f"Search for Taylor Swift song: '{q}'{ftext}")
+            try:
+                result = _parse_groq_json(raw)
+            except Exception:
+                result = {"found": False, "message": "Couldn't parse result. Please try again!"}
+
+            st.session_state.song_result        = result
+            st.session_state.song_result_source = "ai"
+
+            if result.get("found"):
+                try:
+                    save_search(uname(), st.session_state.session_id, q, af, result)
+                except Exception:
+                    pass
+
+        st.session_state.community_facts = all_facts
         else:
             # ── Tier 2: global Firestore cache ────────────────────────────────
             with st.spinner("⚡ Checking saved knowledge..."):
