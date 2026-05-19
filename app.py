@@ -407,7 +407,6 @@ def _get_cached_facts() -> list:
             st.session_state.nlp_facts_cache = []
     return st.session_state.nlp_facts_cache
 
-
 def build_system_prompt(user_msg: str = "") -> str:
     """
     Enhanced system prompt builder.
@@ -521,28 +520,6 @@ def build_system_prompt(user_msg: str = "") -> str:
             print(f"[SwiftieBot] NLP retrieval failed: {e}")
 
     return base
-    # ── Layer 3: All remaining approved facts (background context) ────────────
-    if all_facts:
-        try:
-            # Build a concise background block (different from NLP-ranked block above)
-            background_lines = []
-            for f in all_facts:
-                cat     = f.get("category", "general").upper()
-                title   = f.get("title",   "")
-                content = f.get("content", "")
-                background_lines.append(f"  • [{cat}] {title}: {content}")
-
-            if background_lines:
-                base += (
-                    "\n\n=== ALL COMMUNITY KNOWLEDGE BASE ==="
-                    "\n" + "\n".join(background_lines) +
-                    "\n=== END KNOWLEDGE BASE ==="
-                )
-        except Exception as e:
-            print(f"[SwiftieBot] Background facts failed: {e}")
-
-    return base
-
 
 # ── Groq helpers ──────────────────────────────────────────────────────────────
 def groq_chat(history: list, user_msg: str) -> str:
