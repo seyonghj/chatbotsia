@@ -1,6 +1,9 @@
 import streamlit as st
 from groq import Groq
-import os, uuid, json as _json
+import os
+import uuid
+import json as _json
+
 from firebase_client import (
     register_user, login_user,
     create_session, get_user_sessions,
@@ -26,13 +29,11 @@ st.markdown("""
 
 html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
 
-/* ── Background ── */
 .stApp {
     background: linear-gradient(135deg, #0d0718 0%, #12102a 40%, #0a1628 100%);
     min-height: 100vh;
 }
 
-/* ── Sidebar ── */
 [data-testid="stSidebar"] {
     background: linear-gradient(180deg, #0d0718 0%, #0a1020 100%);
     border-right: 1px solid rgba(212,175,55,0.2);
@@ -40,7 +41,6 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
 [data-testid="stSidebar"] * { color: #e8d5b7 !important; }
 [data-testid="stSidebar"] .stMarkdown p { color: #a89bc2 !important; }
 
-/* ── Tabs ── */
 [data-testid="stTabs"] button {
     font-family: 'DM Sans', sans-serif !important;
     font-size: 0.9rem !important;
@@ -62,7 +62,6 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
     margin-bottom: 1rem;
 }
 
-/* ── Header ── */
 .ts-header { text-align: center; padding: 1.2rem 0 0.5rem; }
 .ts-header h1 {
     font-family: 'Playfair Display', serif;
@@ -84,7 +83,6 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
     margin: 0.8rem 0 1.2rem;
 }
 
-/* ── Chat messages ── */
 .stChatMessage {
     background: rgba(255,255,255,0.03) !important;
     border: 1px solid rgba(212,175,55,0.12) !important;
@@ -100,7 +98,6 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
     line-height: 1.7;
 }
 
-/* ── Chat input ── */
 [data-testid="stChatInput"] textarea {
     background: rgba(255,255,255,0.04) !important;
     border: 1px solid rgba(212,175,55,0.3) !important;
@@ -113,7 +110,6 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
     box-shadow: 0 0 0 2px rgba(212,175,55,0.15) !important;
 }
 
-/* ── Text inputs ── */
 [data-testid="stTextInput"] input {
     background: rgba(255,255,255,0.05) !important;
     border: 1px solid rgba(212,175,55,0.25) !important;
@@ -130,7 +126,6 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
 }
 [data-testid="stTextInput"] label { color: #8a7ea0 !important; font-size: 0.85rem !important; }
 
-/* ── Text area ── */
 [data-testid="stTextArea"] textarea {
     background: rgba(255,255,255,0.05) !important;
     border: 1px solid rgba(212,175,55,0.25) !important;
@@ -144,7 +139,6 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
 }
 [data-testid="stTextArea"] label { color: #8a7ea0 !important; font-size: 0.85rem !important; }
 
-/* ── Selectbox ── */
 [data-testid="stSelectbox"] > div > div {
     background: rgba(255,255,255,0.05) !important;
     border: 1px solid rgba(212,175,55,0.25) !important;
@@ -152,7 +146,6 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
     border-radius: 10px !important;
 }
 
-/* ── Buttons ── */
 .stButton > button {
     background: linear-gradient(135deg, rgba(212,175,55,0.15), rgba(212,175,55,0.05));
     border: 1px solid rgba(212,175,55,0.35);
@@ -173,7 +166,6 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
 }
 .stButton > button:active { transform: translateY(0); }
 
-/* ── Source badge ── */
 .source-badge {
     display: inline-flex;
     align-items: center;
@@ -198,48 +190,7 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
     color: #d4af37;
 }
 
-/* ── Auth modal overlay ── */
-.modal-overlay {
-    position: fixed;
-    top: 0; left: 0;
-    width: 100vw; height: 100vh;
-    background: rgba(5,3,15,0.85);
-    backdrop-filter: blur(8px);
-    z-index: 9998;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-.modal-box {
-    background: linear-gradient(145deg, #1a1030, #0f1a30);
-    border: 1px solid rgba(212,175,55,0.35);
-    border-radius: 20px;
-    padding: 2.5rem;
-    width: 100%;
-    max-width: 440px;
-    box-shadow: 0 25px 60px rgba(0,0,0,0.6), 0 0 40px rgba(212,175,55,0.08);
-    position: relative;
-}
-.modal-box h2 {
-    font-family: 'Playfair Display', serif;
-    color: #d4af37;
-    text-align: center;
-    font-size: 1.8rem;
-    margin: 0 0 0.3rem;
-}
-.modal-box .modal-sub {
-    text-align: center;
-    color: #7a6e8a;
-    font-size: 0.88rem;
-    margin-bottom: 1.8rem;
-    font-style: italic;
-}
-
-/* ── Welcome hero ── */
-.hero-section {
-    text-align: center;
-    padding: 4rem 2rem;
-}
+.hero-section { text-align: center; padding: 4rem 2rem; }
 .hero-section .hero-icon { font-size: 4rem; margin-bottom: 1rem; }
 .hero-section h2 {
     font-family: 'Playfair Display', serif;
@@ -268,7 +219,6 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
 .hero-feature .feat-icon { font-size: 1.6rem; margin-bottom: 0.4rem; }
 .hero-feature span { color: #d4af37; font-weight: 600; display: block; font-size: 0.82rem; }
 
-/* ── Song card ── */
 .song-card {
     background: linear-gradient(145deg, rgba(212,175,55,0.06), rgba(255,255,255,0.03));
     border: 1px solid rgba(212,175,55,0.2);
@@ -315,11 +265,9 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
     margin: 0.5rem 0 1rem;
 }
 
-/* ── Info rows ── */
 .info-label { color: #7a6e8a !important; font-size: 0.78rem !important; font-weight: 600 !important; text-transform: uppercase !important; letter-spacing: 0.5px !important; margin-bottom: 0.1rem !important; }
 .info-value { color: #e8d5b7 !important; font-size: 0.92rem !important; margin-bottom: 0.8rem !important; }
 
-/* ── Section blocks ── */
 .section-block {
     background: rgba(255,255,255,0.03);
     border: 1px solid rgba(212,175,55,0.1);
@@ -330,7 +278,6 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
 .section-block h4 { color: #d4af37; margin: 0 0 0.4rem; font-size: 0.88rem; font-weight: 600; }
 .section-block p { color: #c8bda8; font-size: 0.9rem; margin: 0; line-height: 1.6; }
 
-/* ── Fun fact ── */
 .fun-fact-block {
     background: linear-gradient(135deg, rgba(212,175,55,0.08), rgba(212,175,55,0.03));
     border: 1px solid rgba(212,175,55,0.25);
@@ -342,7 +289,6 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
 .fun-fact-block::before { content: '🥚'; position: absolute; top: -10px; right: 12px; font-size: 1.2rem; }
 .fun-fact-block p { color: #e8d5b7; font-size: 0.9rem; margin: 0; line-height: 1.6; }
 
-/* ── History card ── */
 .history-card {
     background: rgba(255,255,255,0.03);
     border: 1px solid rgba(212,175,55,0.15);
@@ -356,7 +302,6 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
 .history-card .h-id { color: #d4af37; font-size: 0.82rem; font-family: monospace; font-weight: 600; }
 .history-card .h-meta { color: #7a6e8a; font-size: 0.78rem; margin-top: 0.15rem; }
 
-/* ── Fact card ── */
 .fact-card {
     background: rgba(255,255,255,0.03);
     border: 1px solid rgba(212,175,55,0.15);
@@ -382,7 +327,6 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
 .fact-content { color: #b8a898; font-size: 0.88rem; line-height: 1.55; }
 .fact-meta { color: #5a5270; font-size: 0.75rem; margin-top: 0.4rem; }
 
-/* ── Chips ── */
 .chip-row { display:flex; flex-wrap:wrap; gap:8px; margin:1.2rem 0; justify-content:center; }
 .chip {
     background: rgba(212,175,55,0.08);
@@ -397,12 +341,10 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
 }
 .chip:hover { background: rgba(212,175,55,0.15); border-color: #d4af37; }
 
-/* ── Alerts ── */
 .stSuccess > div { background: rgba(50,200,100,0.1) !important; border-color: rgba(50,200,100,0.3) !important; }
 .stError > div { background: rgba(220,50,50,0.1) !important; border-color: rgba(220,50,50,0.3) !important; }
 .stWarning > div { background: rgba(255,165,0,0.1) !important; border-color: rgba(255,165,0,0.3) !important; }
 
-/* ── Metric ── */
 [data-testid="stMetric"] { background: rgba(255,255,255,0.03); border-radius: 10px; padding: 0.6rem; }
 [data-testid="stMetricValue"] { color: #d4af37 !important; }
 [data-testid="stMetricLabel"] { color: #7a6e8a !important; }
@@ -462,7 +404,7 @@ Use light emojis (✨🎸🌟💛) sparingly for warmth."""
         return base
 
 
-def groq_chat(history: list[dict], user_msg: str) -> str:
+def groq_chat(history: list, user_msg: str) -> str:
     msgs = [{"role": "system", "content": build_system_prompt()}]
     for m in history:
         msgs.append({"role": m["role"], "content": m["content"]})
@@ -484,8 +426,6 @@ def groq_once(user_msg: str) -> str:
     return r.choices[0].message.content
 
 
-# ── DB-first song search ──────────────────────────────────────────────────────
-
 def _parse_groq_json(raw: str) -> dict:
     """Strip markdown fences and parse JSON from Groq response."""
     raw = raw.strip()
@@ -497,60 +437,6 @@ def _parse_groq_json(raw: str) -> dict:
     return _json.loads(raw.strip())
 
 
-def search_song(query: str, album_filter: str | None) -> tuple[dict, str]:
-    """
-    Three-tier lookup:
-      1. Global Firestore cache  (prior AI result for this query)
-      2. Community-approved facts mentioning this song
-      3. Groq AI  (result then cached for future searches)
-
-    Returns (result_dict, source_label)
-    source_label: "cache" | "community" | "ai"
-    """
-    q = query.strip()
-    q_lower = q.lower()
-
-    # ── Tier 1: global search cache ──────────────────────────────────────────
-    cached = search_saved_searches(q_lower, album_filter)
-    if cached:
-        return cached, "cache"
-
-    # ── Tier 2: community facts ───────────────────────────────────────────────
-    matching_facts = get_approved_facts_for_song(q_lower)
-    if matching_facts:
-        # Build a pseudo-result from the facts so the UI renders normally
-        facts_text = " | ".join(f.get("content", "") for f in matching_facts[:3])
-        result = {
-            "found":        True,
-            "song_title":   q.title(),
-            "album":        album_filter or "See community facts below",
-            "year":         "—",
-            "era":          "—",
-            "writers":      "—",
-            "producers":    "—",
-            "duration":     "—",
-            "chart_peak":   "—",
-            "certifications": "—",
-            "themes":       facts_text,
-            "story":        "This result was assembled from community-contributed facts.",
-            "iconic_moment": "—",
-            "lyric_snippet": "From the Swiftie community knowledge base",
-            "fun_fact":     matching_facts[0].get("content", "—"),
-            "_from_community": True,
-        }
-        return result, "community"
-
-    # ── Tier 3: Groq AI ───────────────────────────────────────────────────────
-    ftext = f" from album: {album_filter}" if album_filter else ""
-    raw = groq_once(f"Search for Taylor Swift song: '{q}'{ftext}")
-    try:
-        result = _parse_groq_json(raw)
-    except Exception:
-        return {"found": False, "message": "Couldn't parse result. Please try again!"}, "ai"
-
-    return result, "ai"
-
-
 # ── Session defaults ──────────────────────────────────────────────────────────
 _defaults = {
     "logged_in":           False,
@@ -558,7 +444,7 @@ _defaults = {
     "session_id":          str(uuid.uuid4()),
     "messages":            [],
     "song_result":         None,
-    "song_result_source":  None,   # "cache" | "community" | "ai"
+    "song_result_source":  None,
     "auth_mode":           "login",
     "admin_authenticated": False,
     "_inject_prompt":      None,
@@ -569,10 +455,10 @@ for k, v in _defaults.items():
         st.session_state[k] = v
 
 
-def uname() -> str | None:
+def uname():
     return st.session_state.current_user["username"] if st.session_state.logged_in else None
 
-def dname() -> str:
+def dname():
     return st.session_state.current_user["display_name"] if st.session_state.logged_in else ""
 
 
@@ -721,8 +607,8 @@ with st.sidebar:
                 st.rerun()
         with col2:
             if st.button("🚪 Logout", key="sb_logout"):
-                for k in ["logged_in","current_user","messages","song_result",
-                          "song_result_source","admin_authenticated","_inject_prompt"]:
+                for k in ["logged_in", "current_user", "messages", "song_result",
+                          "song_result_source", "admin_authenticated", "_inject_prompt"]:
                     st.session_state[k] = _defaults.get(k)
                 st.session_state.session_id = str(uuid.uuid4())
                 st.rerun()
@@ -824,25 +710,25 @@ with tab_chat:
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# TAB 2 — SONG SEARCH  (DB-first)
+# TAB 2 — SONG SEARCH  (DB-first: cache → community facts → AI)
 # ════════════════════════════════════════════════════════════════════════════
 with tab_search:
     st.markdown("### 🔍 Song Search")
     st.markdown(
         "<p style='color:#7a6e8a;font-size:0.88rem;'>"
-        "Search any Taylor Swift song for full details — themes, story, writers, chart stats, and an iconic line. "
-        "Results are pulled from the database first; the AI is only called when needed."
+        "Search any Taylor Swift song for full details. "
+        "Results come from the database first — the AI is only called when needed."
         "</p>",
         unsafe_allow_html=True,
     )
 
     ALBUMS = [
-        "Any album","Taylor Swift (2006)","Fearless (2008)","Speak Now (2010)",
-        "Red (2012)","1989 (2014)","reputation (2017)","Lover (2019)",
-        "folklore (2020)","evermore (2020)","Midnights (2022)",
+        "Any album", "Taylor Swift (2006)", "Fearless (2008)", "Speak Now (2010)",
+        "Red (2012)", "1989 (2014)", "reputation (2017)", "Lover (2019)",
+        "folklore (2020)", "evermore (2020)", "Midnights (2022)",
         "The Tortured Poets Department (2024)",
-        "Fearless (Taylor's Version)","Red (Taylor's Version)",
-        "Speak Now (Taylor's Version)","1989 (Taylor's Version)",
+        "Fearless (Taylor's Version)", "Red (Taylor's Version)",
+        "Speak Now (Taylor's Version)", "1989 (Taylor's Version)",
     ]
 
     col1, col2 = st.columns([2, 1])
@@ -853,50 +739,48 @@ with tab_search:
 
     if st.button("🔍  Search", key="search_btn") and song_query.strip():
         af = album_filter if album_filter != "Any album" else None
+        q  = song_query.strip()
 
-        # ── Tier 1: cache ────────────────────────────────────────────────────
+        # ── Tier 1: global Firestore cache ───────────────────────────────────
         with st.spinner("⚡ Checking saved knowledge..."):
-            cached = search_saved_searches(song_query.strip().lower(), af)
+            cached = search_saved_searches(q.lower(), af)
 
         if cached:
             st.session_state.song_result        = cached
             st.session_state.song_result_source = "cache"
 
         else:
-            # ── Tier 2: community facts ──────────────────────────────────────
+            # ── Tier 2: approved community facts ─────────────────────────────
             with st.spinner("💡 Checking community facts..."):
-                facts = get_approved_facts_for_song(song_query.strip().lower())
+                facts = get_approved_facts_for_song(q.lower())
 
             if facts:
                 facts_text = " | ".join(f.get("content", "") for f in facts[:3])
-                community_result = {
-                    "found":         True,
-                    "song_title":    song_query.strip().title(),
-                    "album":         af or "See community facts below",
-                    "year":          "—",
-                    "era":           "—",
-                    "writers":       "—",
-                    "producers":     "—",
-                    "duration":      "—",
-                    "chart_peak":    "—",
-                    "certifications":"—",
-                    "themes":        facts_text,
-                    "story":         "Assembled from community-contributed facts.",
-                    "iconic_moment": "—",
-                    "lyric_snippet": "From the Swiftie community knowledge base",
-                    "fun_fact":      facts[0].get("content", "—"),
+                st.session_state.song_result = {
+                    "found":           True,
+                    "song_title":      q.title(),
+                    "album":           af or "See community facts below",
+                    "year":            "—",
+                    "era":             "—",
+                    "writers":         "—",
+                    "producers":       "—",
+                    "duration":        "—",
+                    "chart_peak":      "—",
+                    "certifications":  "—",
+                    "themes":          facts_text,
+                    "story":           "Assembled from community-contributed facts.",
+                    "iconic_moment":   "—",
+                    "lyric_snippet":   "From the Swiftie community knowledge base",
+                    "fun_fact":        facts[0].get("content", "—"),
                     "_from_community": True,
                 }
-                st.session_state.song_result        = community_result
                 st.session_state.song_result_source = "community"
 
             else:
-                # ── Tier 3: Groq AI ──────────────────────────────────────────
+                # ── Tier 3: Groq AI ───────────────────────────────────────────
                 ftext = f" from album: {af}" if af else ""
                 with st.spinner("🤖 Asking the AI for details..."):
-                    raw = groq_once(
-                        f"Search for Taylor Swift song: '{song_query.strip()}'{ftext}"
-                    )
+                    raw = groq_once(f"Search for Taylor Swift song: '{q}'{ftext}")
                 try:
                     result = _parse_groq_json(raw)
                 except Exception:
@@ -905,18 +789,12 @@ with tab_search:
                 st.session_state.song_result        = result
                 st.session_state.song_result_source = "ai"
 
-                # Cache successful AI results for everyone
+                # Cache successful AI result for all future users
                 if result.get("found"):
                     try:
-                        save_search(
-                            uname(),
-                            st.session_state.session_id,
-                            song_query.strip(),
-                            af,
-                            result,
-                        )
+                        save_search(uname(), st.session_state.session_id, q, af, result)
                     except Exception:
-                        pass  # Non-fatal — result is still shown
+                        pass
 
     # ── Render result ─────────────────────────────────────────────────────────
     result = st.session_state.song_result
@@ -928,65 +806,34 @@ with tab_search:
         else:
             # Source badge
             if source == "cache":
-                st.markdown(
-                    "<span class='source-badge'>⚡ Loaded from database cache</span>",
-                    unsafe_allow_html=True,
-                )
+                st.markdown("<span class='source-badge'>⚡ Loaded from database cache</span>", unsafe_allow_html=True)
             elif source == "community":
-                st.markdown(
-                    "<span class='source-badge community'>💡 Assembled from community facts</span>",
-                    unsafe_allow_html=True,
-                )
+                st.markdown("<span class='source-badge community'>💡 Assembled from community facts</span>", unsafe_allow_html=True)
             else:
-                st.markdown(
-                    "<span class='source-badge ai'>🤖 Generated by AI · saved to cache</span>",
-                    unsafe_allow_html=True,
-                )
+                st.markdown("<span class='source-badge ai'>🤖 Generated by AI · saved to cache</span>", unsafe_allow_html=True)
 
-            # Song header card
             st.markdown(f"""
             <div class="song-card">
-                <h3>🎵 {result.get('song_title','')}</h3>
-                <span class="album-tag">💿 {result.get('album','')} · {result.get('year','')}</span>
-                <div class="lyric-line">"{result.get('lyric_snippet','')}"</div>
+                <h3>🎵 {result.get('song_title', '')}</h3>
+                <span class="album-tag">💿 {result.get('album', '')} · {result.get('year', '')}</span>
+                <div class="lyric-line">"{result.get('lyric_snippet', '')}"</div>
             </div>""", unsafe_allow_html=True)
 
-            # Details grid
             c1, c2 = st.columns(2)
             with c1:
-                for label, key in [
-                    ("✍️ Songwriters", "writers"),
-                    ("🎛️ Producers",   "producers"),
-                    ("⏱️ Duration",     "duration"),
-                ]:
-                    st.markdown(
-                        f"<p class='info-label'>{label}</p>"
-                        f"<p class='info-value'>{result.get(key,'Unknown')}</p>",
-                        unsafe_allow_html=True,
-                    )
+                for label, key in [("✍️ Songwriters", "writers"), ("🎛️ Producers", "producers"), ("⏱️ Duration", "duration")]:
+                    st.markdown(f"<p class='info-label'>{label}</p><p class='info-value'>{result.get(key, 'Unknown')}</p>", unsafe_allow_html=True)
             with c2:
-                for label, key in [
-                    ("📊 Chart Peak",      "chart_peak"),
-                    ("🏅 Certifications",  "certifications"),
-                    ("🌐 Era",             "era"),
-                ]:
-                    st.markdown(
-                        f"<p class='info-label'>{label}</p>"
-                        f"<p class='info-value'>{result.get(key,'Unknown')}</p>",
-                        unsafe_allow_html=True,
-                    )
+                for label, key in [("📊 Chart Peak", "chart_peak"), ("🏅 Certifications", "certifications"), ("🌐 Era", "era")]:
+                    st.markdown(f"<p class='info-label'>{label}</p><p class='info-value'>{result.get(key, 'Unknown')}</p>", unsafe_allow_html=True)
 
             st.markdown(f"""
-            <div class="section-block"><h4>🎭 Themes &amp; Mood</h4><p>{result.get('themes','')}</p></div>
-            <div class="section-block"><h4>📖 Songwriting Story</h4><p>{result.get('story','')}</p></div>
-            <div class="section-block"><h4>🌟 Iconic Moment</h4><p>{result.get('iconic_moment','')}</p></div>
-            <div class="fun-fact-block"><p>{result.get('fun_fact','')}</p></div>
+            <div class="section-block"><h4>🎭 Themes &amp; Mood</h4><p>{result.get('themes', '')}</p></div>
+            <div class="section-block"><h4>📖 Songwriting Story</h4><p>{result.get('story', '')}</p></div>
+            <div class="section-block"><h4>🌟 Iconic Moment</h4><p>{result.get('iconic_moment', '')}</p></div>
+            <div class="fun-fact-block"><p>{result.get('fun_fact', '')}</p></div>
             """, unsafe_allow_html=True)
-            st.markdown(
-                "<p style='color:#5a5270;font-size:0.82rem;text-align:center;'>"
-                "💬 Switch to the Chat tab to ask more about this song!</p>",
-                unsafe_allow_html=True,
-            )
+            st.markdown("<p style='color:#5a5270;font-size:0.82rem;text-align:center;'>💬 Switch to the Chat tab to ask more about this song!</p>", unsafe_allow_html=True)
     else:
         st.markdown("""
         <div style="text-align:center;padding:3rem 1rem;">
@@ -1018,10 +865,10 @@ with tab_history:
     else:
         st.markdown(f"<p style='color:#7a6e8a;font-size:0.82rem;'>{len(sessions)} session(s) found.</p>", unsafe_allow_html=True)
         for i, sess in enumerate(sessions):
-            sid      = sess.get("session_id", "")
-            count    = sess.get("message_count", 0)
-            ts       = sess.get("last_updated", sess.get("created_at",""))[:19].replace("T"," ")
-            is_cur   = sid == st.session_state.session_id
+            sid       = sess.get("session_id", "")
+            count     = sess.get("message_count", 0)
+            ts        = sess.get("last_updated", sess.get("created_at", ""))[:19].replace("T", " ")
+            is_cur    = sid == st.session_state.session_id
             cur_badge = " 🟢 current" if is_cur else ""
 
             col_info, col_load, col_del = st.columns([5, 1.5, 1])
@@ -1030,7 +877,7 @@ with tab_history:
                 st.markdown(f"""
                 <div class="{card_cls}">
                   <div class="h-id">Session {sid[:8]}…{cur_badge}</div>
-                  <div class="h-meta">🕐 {ts} &nbsp;·&nbsp; 💬 {count} message{'s' if count!=1 else ''}</div>
+                  <div class="h-meta">🕐 {ts} &nbsp;·&nbsp; 💬 {count} message{'s' if count != 1 else ''}</div>
                 </div>""", unsafe_allow_html=True)
             with col_load:
                 if not is_cur and st.button("Load", key=f"load_{i}"):
@@ -1061,7 +908,7 @@ with tab_contribute:
     st.markdown("### 💡 Contribute a Taylor Swift Fact")
     st.markdown("<p style='color:#7a6e8a;font-size:0.88rem;'>Share something you know! Approved facts get added to SwiftieBot's knowledge and used when answering other users.</p>", unsafe_allow_html=True)
 
-    CATEGORIES = ["song","album","tour","personal","award","easter_egg","other"]
+    CATEGORIES = ["song", "album", "tour", "personal", "award", "easter_egg", "other"]
 
     with st.form("contribute_form", clear_on_submit=True):
         fc1, fc2 = st.columns([1, 2])
@@ -1099,10 +946,10 @@ with tab_contribute:
         for fact in approved[:20]:
             st.markdown(f"""
             <div class="fact-card">
-              <span class="fact-cat">{fact.get('category','').upper()}</span>
-              <div class="fact-title">{fact.get('title','')}</div>
-              <div class="fact-content">{fact.get('content','')}</div>
-              <div class="fact-meta">By @{fact.get('username','')} · {fact.get('submitted_at','')[:10]}</div>
+              <span class="fact-cat">{fact.get('category', '').upper()}</span>
+              <div class="fact-title">{fact.get('title', '')}</div>
+              <div class="fact-content">{fact.get('content', '')}</div>
+              <div class="fact-meta">By @{fact.get('username', '')} · {fact.get('submitted_at', '')[:10]}</div>
             </div>""", unsafe_allow_html=True)
 
 
@@ -1126,7 +973,7 @@ if is_admin and tab_admin is not None:
             st.success("🔓 Admin access granted")
             st.markdown("---")
 
-            # ── Stats ─────────────────────────────────────────────────────────
+            # Stats
             try:
                 n_approved = len(get_community_facts("approved"))
                 n_pending  = len(get_community_facts("pending"))
@@ -1138,19 +985,19 @@ if is_admin and tab_admin is not None:
             except Exception:
                 pass
 
-            # ── Cache stats ───────────────────────────────────────────────────
+            # Cache stats
             st.markdown("---")
             st.markdown("#### 🗄️ Song Search Cache")
             st.markdown(
                 "<p style='color:#7a6e8a;font-size:0.85rem;'>"
-                "Every unique song search gets stored here so future users skip the AI call entirely.</p>",
+                "Every unique song search is stored here so future users skip the AI call entirely.</p>",
                 unsafe_allow_html=True,
             )
             try:
                 from firebase_admin import firestore as _fs
                 _db = _fs.client()
-                cache_count = len(list(_db.collection("song_searches").limit(500).stream()))
-                st.metric("🔍 Cached Song Lookups", cache_count)
+                cache_docs = list(_db.collection("song_searches").limit(500).stream())
+                st.metric("🔍 Cached Song Lookups", len(cache_docs))
             except Exception:
                 st.caption("Cache stats unavailable.")
 
@@ -1170,10 +1017,10 @@ if is_admin and tab_admin is not None:
                     fid = fact.get("id", "")
                     st.markdown(f"""
                     <div class="fact-card pending">
-                      <span class="fact-cat" style="background:rgba(255,165,0,0.12);border-color:rgba(255,165,0,0.35);color:#ffa500;">{fact.get('category','').upper()}</span>
-                      <div class="fact-title">{fact.get('title','')}</div>
-                      <div class="fact-content">{fact.get('content','')}</div>
-                      <div class="fact-meta">By @{fact.get('username','')} · submitted {fact.get('submitted_at','')[:10]}</div>
+                      <span class="fact-cat" style="background:rgba(255,165,0,0.12);border-color:rgba(255,165,0,0.35);color:#ffa500;">{fact.get('category', '').upper()}</span>
+                      <div class="fact-title">{fact.get('title', '')}</div>
+                      <div class="fact-content">{fact.get('content', '')}</div>
+                      <div class="fact-meta">By @{fact.get('username', '')} · submitted {fact.get('submitted_at', '')[:10]}</div>
                     </div>""", unsafe_allow_html=True)
                     ca, cr, _ = st.columns([1.5, 1.5, 4])
                     with ca:
