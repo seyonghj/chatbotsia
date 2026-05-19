@@ -1,9 +1,6 @@
 import streamlit as st
 from groq import Groq
-import os
-import uuid
-import json as _json
-
+import os, uuid, json as _json
 from firebase_client import (
     register_user, login_user,
     create_session, get_user_sessions,
@@ -427,7 +424,6 @@ def groq_once(user_msg: str) -> str:
 
 
 def _parse_groq_json(raw: str) -> dict:
-    """Strip markdown fences and parse JSON from Groq response."""
     raw = raw.strip()
     if raw.startswith("```"):
         parts = raw.split("```")
@@ -710,14 +706,15 @@ with tab_chat:
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# TAB 2 — SONG SEARCH  (DB-first: cache → community facts → AI)
+# TAB 2 — SONG SEARCH
+# Priority: 1) Community facts  2) Firestore cache  3) Groq AI
 # ════════════════════════════════════════════════════════════════════════════
 with tab_search:
     st.markdown("### 🔍 Song Search")
     st.markdown(
         "<p style='color:#7a6e8a;font-size:0.88rem;'>"
         "Search any Taylor Swift song for full details. "
-        "Results come from the database first — the AI is only called when needed."
+        "Community knowledge is checked first, then the database cache, then the AI."
         "</p>",
         unsafe_allow_html=True,
     )
@@ -737,58 +734,64 @@ with tab_search:
     with col2:
         album_filter = st.selectbox("Filter by album", ALBUMS)
 
-   if st.button("🔍  Search", key="search_btn") and song_query.strip():
-    af = album_filter if album_filter != "Any album" else None
-    q  = song_query.strip()
+    if st.button("🔍  Search", key="search_btn") and song_query.strip():
+        af = album_filter if album_filter != "Any album" else None
+        q  = song_query.strip()
 
-    # ── Tier 1: community facts (highest priority) ───────────────────────
-    with st.spinner("💡 Checking community knowledge..."):
-        facts = get_approved_facts_for_song(q.lower())
+        # ── Tier 1: community facts (highest priority) ────────────────────────
+        with st.spinner("💡 Checking community knowledge..."):
+            facts = get_approved_facts_for_song(q.lower())
 
-    if facts:
-        facts_text = " | ".join(f.get("content", "") for f in facts[:3])
-        st.session_state.song_result = {
-            "found": True,
-            "song_title": q.title(),
-            "album": af or "See community facts below",
-            "year": "—", "era": "—", "writers": "—", "producers": "—",
-            "duration": "—", "chart_peak": "—", "certifications": "—",
-            "themes": facts_text,
-            "story": "Assembled from community-contributed facts.",
-            "iconic_moment": "—",
-            "lyric_snippet": "From the Swiftie community knowledge base",
-            "fun_fact": facts[0].get("content", "—"),
-            "_from_community": True,
-        }
-        st.session_state.song_result_source = "community"
-
-    else:
-        # ── Tier 2: global Firestore cache ───────────────────────────────
-        with st.spinner("⚡ Checking saved knowledge..."):
-            cached = search_saved_searches(q.lower(), af)
-
-        if cached:
-            st.session_state.song_result        = cached
-            st.session_state.song_result_source = "cache"
+        if facts:
+            facts_text = " | ".join(f.get("content", "") for f in facts[:3])
+            st.session_state.song_result = {
+                "found":           True,
+                "song_title":      q.title(),
+                "album":           af or "See community facts below",
+                "year":            "—",
+                "era":             "—",
+                "writers":         "—",
+                "producers":       "—",
+                "duration":        "—",
+                "chart_peak":      "—",
+                "certifications":  "—",
+                "themes":          facts_text,
+                "story":           "Assembled from community-contributed facts.",
+                "iconic_moment":   "—",
+                "lyric_snippet":   "From the Swiftie community knowledge base",
+                "fun_fact":        facts[0].get("content", "—"),
+                "_from_community": True,
+            }
+            st.session_state.song_result_source = "community"
 
         else:
-            # ── Tier 3: Groq AI ──────────────────────────────────────────
-            ftext = f" from album: {af}" if af else ""
-            with st.spinner("🤖 Asking the AI for details..."):
-                raw = groq_once(f"Search for Taylor Swift song: '{q}'{ftext}")
-            try:
-                result = _parse_groq_json(raw)
-            except Exception:
-                result = {"found": False, "message": "Couldn't parse result. Please try again!"}
+            # ── Tier 2: global Firestore cache ────────────────────────────────
+            with st.spinner("⚡ Checking saved knowledge..."):
+                cached = search_saved_searches(q.lower(), af)
 
-            st.session_state.song_result        = result
-            st.session_state.song_result_source = "ai"
+            if cached:
+                st.session_state.song_result        = cached
+                st.session_state.song_result_source = "cache"
 
-            if result.get("found"):
+            else:
+                # ── Tier 3: Groq AI ───────────────────────────────────────────
+                ftext = f" from album: {af}" if af else ""
+                with st.spinner("🤖 Asking the AI for details..."):
+                    raw = groq_once(f"Search for Taylor Swift song: '{q}'{ftext}")
                 try:
-                    save_search(uname(), st.session_state.session_id, q, af, result)
+                    result = _parse_groq_json(raw)
                 except Exception:
-                    pass
+                    result = {"found": False, "message": "Couldn't parse result. Please try again!"}
+
+                st.session_state.song_result        = result
+                st.session_state.song_result_source = "ai"
+
+                # Cache successful AI result for all future users
+                if result.get("found"):
+                    try:
+                        save_search(uname(), st.session_state.session_id, q, af, result)
+                    except Exception:
+                        pass
 
     # ── Render result ─────────────────────────────────────────────────────────
     result = st.session_state.song_result
@@ -798,11 +801,10 @@ with tab_search:
         if not result.get("found"):
             st.warning(f"🎵 {result.get('message', 'Song not found. Try a different spelling!')}")
         else:
-            # Source badge
-            if source == "cache":
+            if source == "community":
+                st.markdown("<span class='source-badge community'>💡 From community knowledge — highest priority</span>", unsafe_allow_html=True)
+            elif source == "cache":
                 st.markdown("<span class='source-badge'>⚡ Loaded from database cache</span>", unsafe_allow_html=True)
-            elif source == "community":
-                st.markdown("<span class='source-badge community'>💡 Assembled from community facts</span>", unsafe_allow_html=True)
             else:
                 st.markdown("<span class='source-badge ai'>🤖 Generated by AI · saved to cache</span>", unsafe_allow_html=True)
 
@@ -900,7 +902,7 @@ with tab_history:
 # ════════════════════════════════════════════════════════════════════════════
 with tab_contribute:
     st.markdown("### 💡 Contribute a Taylor Swift Fact")
-    st.markdown("<p style='color:#7a6e8a;font-size:0.88rem;'>Share something you know! Approved facts get added to SwiftieBot's knowledge and used when answering other users.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color:#7a6e8a;font-size:0.88rem;'>Share something you know! Approved facts get added to SwiftieBot's knowledge and are shown first in song searches.</p>", unsafe_allow_html=True)
 
     CATEGORIES = ["song", "album", "tour", "personal", "award", "easter_egg", "other"]
 
@@ -927,7 +929,7 @@ with tab_contribute:
 
     st.markdown("---")
     st.markdown("### ✅ Approved Community Facts")
-    st.markdown("<p style='color:#7a6e8a;font-size:0.85rem;'>These facts are now part of SwiftieBot's knowledge base.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color:#7a6e8a;font-size:0.85rem;'>These facts are now part of SwiftieBot's knowledge base and appear first in song searches.</p>", unsafe_allow_html=True)
 
     try:
         approved = get_community_facts("approved")
@@ -967,7 +969,6 @@ if is_admin and tab_admin is not None:
             st.success("🔓 Admin access granted")
             st.markdown("---")
 
-            # Stats
             try:
                 n_approved = len(get_community_facts("approved"))
                 n_pending  = len(get_community_facts("pending"))
@@ -979,12 +980,11 @@ if is_admin and tab_admin is not None:
             except Exception:
                 pass
 
-            # Cache stats
             st.markdown("---")
             st.markdown("#### 🗄️ Song Search Cache")
             st.markdown(
                 "<p style='color:#7a6e8a;font-size:0.85rem;'>"
-                "Every unique song search is stored here so future users skip the AI call entirely.</p>",
+                "Every unique AI song lookup is stored here. Community facts always take priority over this cache.</p>",
                 unsafe_allow_html=True,
             )
             try:
