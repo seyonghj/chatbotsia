@@ -1,21 +1,13 @@
 import streamlit as st
 from groq import Groq
-import os, uuid, json as _json, re
+import os, uuid, json as _json
 from firebase_client import (
     register_user, login_user,
     create_session, get_user_sessions,
     get_user_session_history, delete_user_session,
     save_message, load_messages, save_search,
-    search_saved_searches, get_approved_facts_for_song,
     submit_community_fact, get_community_facts,
     review_community_fact, get_approved_facts_for_prompt,
-    search_facts_by_nlp,
-)
-from nlp_engine import (
-    detect_intent,
-    extract_entities,
-    build_facts_context,
-    expand_song_query,
 )
 
 # ── Page config ───────────────────────────────────────────────────────────────
@@ -33,11 +25,13 @@ st.markdown("""
 
 html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
 
+/* ── Background ── */
 .stApp {
     background: linear-gradient(135deg, #0d0718 0%, #12102a 40%, #0a1628 100%);
     min-height: 100vh;
 }
 
+/* ── Sidebar ── */
 [data-testid="stSidebar"] {
     background: linear-gradient(180deg, #0d0718 0%, #0a1020 100%);
     border-right: 1px solid rgba(212,175,55,0.2);
@@ -45,6 +39,7 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
 [data-testid="stSidebar"] * { color: #e8d5b7 !important; }
 [data-testid="stSidebar"] .stMarkdown p { color: #a89bc2 !important; }
 
+/* ── Tabs ── */
 [data-testid="stTabs"] button {
     font-family: 'DM Sans', sans-serif !important;
     font-size: 0.9rem !important;
@@ -66,6 +61,7 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
     margin-bottom: 1rem;
 }
 
+/* ── Header ── */
 .ts-header { text-align: center; padding: 1.2rem 0 0.5rem; }
 .ts-header h1 {
     font-family: 'Playfair Display', serif;
@@ -87,6 +83,7 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
     margin: 0.8rem 0 1.2rem;
 }
 
+/* ── Chat messages ── */
 .stChatMessage {
     background: rgba(255,255,255,0.03) !important;
     border: 1px solid rgba(212,175,55,0.12) !important;
@@ -102,6 +99,7 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
     line-height: 1.7;
 }
 
+/* ── Chat input ── */
 [data-testid="stChatInput"] textarea {
     background: rgba(255,255,255,0.04) !important;
     border: 1px solid rgba(212,175,55,0.3) !important;
@@ -114,6 +112,7 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
     box-shadow: 0 0 0 2px rgba(212,175,55,0.15) !important;
 }
 
+/* ── Text inputs ── */
 [data-testid="stTextInput"] input {
     background: rgba(255,255,255,0.05) !important;
     border: 1px solid rgba(212,175,55,0.25) !important;
@@ -130,6 +129,7 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
 }
 [data-testid="stTextInput"] label { color: #8a7ea0 !important; font-size: 0.85rem !important; }
 
+/* ── Text area ── */
 [data-testid="stTextArea"] textarea {
     background: rgba(255,255,255,0.05) !important;
     border: 1px solid rgba(212,175,55,0.25) !important;
@@ -143,6 +143,7 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
 }
 [data-testid="stTextArea"] label { color: #8a7ea0 !important; font-size: 0.85rem !important; }
 
+/* ── Selectbox ── */
 [data-testid="stSelectbox"] > div > div {
     background: rgba(255,255,255,0.05) !important;
     border: 1px solid rgba(212,175,55,0.25) !important;
@@ -150,6 +151,7 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
     border-radius: 10px !important;
 }
 
+/* ── Buttons ── */
 .stButton > button {
     background: linear-gradient(135deg, rgba(212,175,55,0.15), rgba(212,175,55,0.05));
     border: 1px solid rgba(212,175,55,0.35);
@@ -170,31 +172,73 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
 }
 .stButton > button:active { transform: translateY(0); }
 
-.source-badge {
-    display: inline-flex;
+/* ── Auth modal overlay ── */
+.modal-overlay {
+    position: fixed;
+    top: 0; left: 0;
+    width: 100vw; height: 100vh;
+    background: rgba(5,3,15,0.85);
+    backdrop-filter: blur(8px);
+    z-index: 9998;
+    display: flex;
     align-items: center;
-    gap: 6px;
-    background: rgba(50,200,120,0.1);
-    border: 1px solid rgba(50,200,120,0.3);
-    color: #50c878;
+    justify-content: center;
+}
+.modal-box {
+    background: linear-gradient(145deg, #1a1030, #0f1a30);
+    border: 1px solid rgba(212,175,55,0.35);
     border-radius: 20px;
-    padding: 4px 14px;
-    font-size: 0.78rem;
-    font-weight: 600;
-    margin-bottom: 0.8rem;
+    padding: 2.5rem;
+    width: 100%;
+    max-width: 440px;
+    box-shadow: 0 25px 60px rgba(0,0,0,0.6), 0 0 40px rgba(212,175,55,0.08);
+    position: relative;
 }
-.source-badge.ai {
-    background: rgba(147,112,219,0.1);
-    border-color: rgba(147,112,219,0.3);
-    color: #9370db;
-}
-.source-badge.community {
-    background: rgba(212,175,55,0.1);
-    border-color: rgba(212,175,55,0.3);
+.modal-box h2 {
+    font-family: 'Playfair Display', serif;
     color: #d4af37;
+    text-align: center;
+    font-size: 1.8rem;
+    margin: 0 0 0.3rem;
+}
+.modal-box .modal-sub {
+    text-align: center;
+    color: #7a6e8a;
+    font-size: 0.88rem;
+    margin-bottom: 1.8rem;
+    font-style: italic;
+}
+.modal-tabs {
+    display: flex;
+    gap: 0;
+    margin-bottom: 1.5rem;
+    background: rgba(255,255,255,0.04);
+    border-radius: 10px;
+    padding: 4px;
+    border: 1px solid rgba(212,175,55,0.15);
+}
+.modal-tab {
+    flex: 1;
+    text-align: center;
+    padding: 0.5rem;
+    border-radius: 7px;
+    font-size: 0.88rem;
+    font-weight: 500;
+    color: #7a6e8a;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+.modal-tab.active {
+    background: rgba(212,175,55,0.18);
+    color: #d4af37;
+    border: 1px solid rgba(212,175,55,0.3);
 }
 
-.hero-section { text-align: center; padding: 4rem 2rem; }
+/* ── Welcome hero (shown before login) ── */
+.hero-section {
+    text-align: center;
+    padding: 4rem 2rem;
+}
 .hero-section .hero-icon { font-size: 4rem; margin-bottom: 1rem; }
 .hero-section h2 {
     font-family: 'Playfair Display', serif;
@@ -223,6 +267,7 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
 .hero-feature .feat-icon { font-size: 1.6rem; margin-bottom: 0.4rem; }
 .hero-feature span { color: #d4af37; font-weight: 600; display: block; font-size: 0.82rem; }
 
+/* ── Song card ── */
 .song-card {
     background: linear-gradient(145deg, rgba(212,175,55,0.06), rgba(255,255,255,0.03));
     border: 1px solid rgba(212,175,55,0.2);
@@ -269,9 +314,11 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
     margin: 0.5rem 0 1rem;
 }
 
+/* ── Info rows ── */
 .info-label { color: #7a6e8a !important; font-size: 0.78rem !important; font-weight: 600 !important; text-transform: uppercase !important; letter-spacing: 0.5px !important; margin-bottom: 0.1rem !important; }
 .info-value { color: #e8d5b7 !important; font-size: 0.92rem !important; margin-bottom: 0.8rem !important; }
 
+/* ── Section blocks ── */
 .section-block {
     background: rgba(255,255,255,0.03);
     border: 1px solid rgba(212,175,55,0.1);
@@ -282,6 +329,7 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
 .section-block h4 { color: #d4af37; margin: 0 0 0.4rem; font-size: 0.88rem; font-weight: 600; }
 .section-block p { color: #c8bda8; font-size: 0.9rem; margin: 0; line-height: 1.6; }
 
+/* ── Fun fact ── */
 .fun-fact-block {
     background: linear-gradient(135deg, rgba(212,175,55,0.08), rgba(212,175,55,0.03));
     border: 1px solid rgba(212,175,55,0.25);
@@ -293,6 +341,7 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
 .fun-fact-block::before { content: '🥚'; position: absolute; top: -10px; right: 12px; font-size: 1.2rem; }
 .fun-fact-block p { color: #e8d5b7; font-size: 0.9rem; margin: 0; line-height: 1.6; }
 
+/* ── History card ── */
 .history-card {
     background: rgba(255,255,255,0.03);
     border: 1px solid rgba(212,175,55,0.15);
@@ -306,6 +355,7 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
 .history-card .h-id { color: #d4af37; font-size: 0.82rem; font-family: monospace; font-weight: 600; }
 .history-card .h-meta { color: #7a6e8a; font-size: 0.78rem; margin-top: 0.15rem; }
 
+/* ── Fact card ── */
 .fact-card {
     background: rgba(255,255,255,0.03);
     border: 1px solid rgba(212,175,55,0.15);
@@ -331,6 +381,7 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
 .fact-content { color: #b8a898; font-size: 0.88rem; line-height: 1.55; }
 .fact-meta { color: #5a5270; font-size: 0.75rem; margin-top: 0.4rem; }
 
+/* ── Chips ── */
 .chip-row { display:flex; flex-wrap:wrap; gap:8px; margin:1.2rem 0; justify-content:center; }
 .chip {
     background: rgba(212,175,55,0.08);
@@ -345,10 +396,12 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
 }
 .chip:hover { background: rgba(212,175,55,0.15); border-color: #d4af37; }
 
+/* ── Alerts ── */
 .stSuccess > div { background: rgba(50,200,100,0.1) !important; border-color: rgba(50,200,100,0.3) !important; }
 .stError > div { background: rgba(220,50,50,0.1) !important; border-color: rgba(220,50,50,0.3) !important; }
 .stWarning > div { background: rgba(255,165,0,0.1) !important; border-color: rgba(255,165,0,0.3) !important; }
 
+/* ── Metric ── */
 [data-testid="stMetric"] { background: rgba(255,255,255,0.03); border-radius: 10px; padding: 0.6rem; }
 [data-testid="stMetricValue"] { color: #d4af37 !important; }
 [data-testid="stMetricLabel"] { color: #7a6e8a !important; }
@@ -391,180 +444,68 @@ SONG_SEARCH_PROMPT = """You are a Taylor Swift music expert. Return ONLY a JSON 
 If not found: {"found": false, "message": "brief helpful message"}
 Return ONLY the JSON."""
 
+def build_system_prompt() -> str:
+    base = """You are SwiftieBot, an expert and passionate assistant dedicated entirely to Taylor Swift.
+You have deep encyclopedic knowledge of all her albums, songs, Eras Tour, Easter eggs,
+songwriting stories, chart records, awards, and biography.
+Albums: Taylor Swift (2006), Fearless (2008), Speak Now (2010), Red (2012), 1989 (2014),
+reputation (2017), Lover (2019), folklore (2020), evermore (2020), Midnights (2022),
+The Tortured Poets Department (2024), plus all Taylor's Version re-recordings.
+Be warm, enthusiastic, and knowledgeable — like a Swiftie best friend.
+If asked about anything unrelated to Taylor Swift, politely redirect.
+Use light emojis (✨🎸🌟💛) sparingly for warmth."""
+    try:
+        return base + get_approved_facts_for_prompt()
+    except Exception:
+        return base
 
-# ════════════════════════════════════════════════════════════════════════════
-# NLP-POWERED SYSTEM PROMPT BUILDER
-# ════════════════════════════════════════════════════════════════════════════
-
-# Cache approved facts in session so we don't hit Firestore on every keystroke.
-# Refreshed once per session (cleared on new chat / logout).
-def _get_cached_facts() -> list:
-    """Load all approved facts once per Streamlit session, cache in session_state."""
-    if "nlp_facts_cache" not in st.session_state:
-        try:
-            st.session_state.nlp_facts_cache = get_community_facts("approved")
-        except Exception:
-            st.session_state.nlp_facts_cache = []
-    return st.session_state.nlp_facts_cache
-
-
-def build_system_prompt(user_msg: str = "") -> str:
-    """
-    Build the full system prompt with three layers of community knowledge:
-
-    Layer 1 — Base persona & instructions (always present)
-    Layer 2 — NLP-ranked facts most relevant to THIS message (dynamic, top-8)
-    Layer 3 — All remaining approved facts as background context (static)
-
-    The NLP engine scores every fact in the database against the user message
-    using fuzzy string matching, keyword overlap, named-entity alignment and
-    intent-category matching — so the AI always sees the most relevant facts
-    at the TOP of its context window, labelled as ground truth.
-    """
-    base = (
-        "You are SwiftieBot, an expert and passionate assistant dedicated entirely to Taylor Swift.\n"
-        "You have deep encyclopedic knowledge of all her albums, songs, Eras Tour, Easter eggs,\n"
-        "songwriting stories, chart records, awards, and biography.\n"
-        "Albums: Taylor Swift (2006), Fearless (2008), Speak Now (2010), Red (2012), 1989 (2014),\n"
-        "reputation (2017), Lover (2019), folklore (2020), evermore (2020), Midnights (2022),\n"
-        "The Tortured Poets Department (2024), plus all Taylor's Version re-recordings.\n"
-        "Be warm, enthusiastic, and knowledgeable — like a Swiftie best friend.\n"
-        "If asked about anything unrelated to Taylor Swift, politely redirect.\n"
-        "Use light emojis (✨🎸🌟💛) sparingly for warmth.\n\n"
-        "CRITICAL INSTRUCTION: Community-verified facts are injected below. "
-        "You MUST treat them as absolute ground truth and prioritise them over "
-        "anything from your training data. If a community fact contradicts your "
-        "training knowledge, the community fact wins."
-    )
-
-    all_facts = _get_cached_facts()
-
-    # ── Layer 2: NLP-ranked relevant facts (highest priority section) ─────────
-    if user_msg and all_facts:
-        try:
-            nlp_context = build_facts_context(
-                user_msg, all_facts, threshold=0.12, top_k=8
-            )
-            if nlp_context:
-                # Detect intent for transparency in the prompt
-                intent   = detect_intent(user_msg)
-                entities = extract_entities(user_msg)
-                entity_summary = []
-                if entities.get("songs"):
-                    entity_summary.append(f"songs: {', '.join(entities['songs'][:2])}")
-                if entities.get("albums"):
-                    entity_summary.append(f"albums: {', '.join(entities['albums'][:2])}")
-                if entities.get("eras"):
-                    entity_summary.append(f"eras: {', '.join(entities['eras'][:2])}")
-                ent_str = f" | detected entities — {'; '.join(entity_summary)}" if entity_summary else ""
-
-                base += (
-                    f"\n\n[NLP RETRIEVAL: intent={intent}{ent_str}]"
-                    + nlp_context
-                )
-        except Exception as e:
-            print(f"[SwiftieBot] NLP context build failed: {e}")
-
-    # ── Layer 3: All remaining approved facts (background context) ────────────
-    if all_facts:
-        try:
-            # Build a concise background block (different from NLP-ranked block above)
-            background_lines = []
-            for f in all_facts:
-                cat     = f.get("category", "general").upper()
-                title   = f.get("title",   "")
-                content = f.get("content", "")
-                background_lines.append(f"  • [{cat}] {title}: {content}")
-
-            if background_lines:
-                base += (
-                    "\n\n=== ALL COMMUNITY KNOWLEDGE BASE ==="
-                    "\n" + "\n".join(background_lines) +
-                    "\n=== END KNOWLEDGE BASE ==="
-                )
-        except Exception as e:
-            print(f"[SwiftieBot] Background facts failed: {e}")
-
-    return base
-
-
-# ── Groq helpers ──────────────────────────────────────────────────────────────
-def groq_chat(history: list, user_msg: str) -> str:
-    """
-    Send a chat message to Groq with NLP-enhanced system prompt.
-    The system prompt is rebuilt on every call so:
-      - NLP retrieval always matches the current user message
-      - Newly approved community facts are picked up within the session
-    """
-    msgs = [{"role": "system", "content": build_system_prompt(user_msg)}]
-    # Pass history excluding the message we're about to append
+def groq_chat(history: list[dict], user_msg: str) -> str:
+    msgs = [{"role": "system", "content": build_system_prompt()}]
     for m in history:
         msgs.append({"role": m["role"], "content": m["content"]})
-    msgs.append({"role": "user", "content": user_msg})
-
-    r = groq_client.chat.completions.create(
-        model=GROQ_MODEL,
-        messages=msgs,
-        max_tokens=1024,
-    )
+    if not msgs or msgs[-1]["role"] != "user":
+        msgs.append({"role": "user", "content": user_msg})
+    r = groq_client.chat.completions.create(model=GROQ_MODEL, messages=msgs, max_tokens=1024)
     return r.choices[0].message.content
 
-
 def groq_once(user_msg: str) -> str:
-    """One-shot call for song search JSON (no history, no community facts needed)."""
     r = groq_client.chat.completions.create(
         model=GROQ_MODEL,
-        messages=[
-            {"role": "system", "content": SONG_SEARCH_PROMPT},
-            {"role": "user",   "content": user_msg},
-        ],
+        messages=[{"role":"system","content":SONG_SEARCH_PROMPT},{"role":"user","content":user_msg}],
         max_tokens=800,
     )
     return r.choices[0].message.content
 
-
-def _parse_groq_json(raw: str) -> dict:
-    raw = raw.strip()
-    if raw.startswith("```"):
-        parts = raw.split("```")
-        raw = parts[1] if len(parts) > 1 else raw
-        if raw.startswith("json"):
-            raw = raw[4:]
-    return _json.loads(raw.strip())
-
-
 # ── Session defaults ──────────────────────────────────────────────────────────
 _defaults = {
-    "logged_in":           False,
-    "current_user":        None,
-    "session_id":          str(uuid.uuid4()),
-    "messages":            [],
-    "song_result":         None,
-    "song_result_source":  None,
-    "auth_mode":           "login",
+    "logged_in": False,
+    "current_user": None,
+    "session_id": str(uuid.uuid4()),
+    "messages": [],
+    "song_result": None,
+    "auth_mode": "login",
     "admin_authenticated": False,
-    "_inject_prompt":      None,
-    "show_auth":           False,
+    "_inject_prompt": None,
+    "show_auth": False,
 }
 for k, v in _defaults.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
-
-def uname():
+def uname() -> str | None:
     return st.session_state.current_user["username"] if st.session_state.logged_in else None
 
-def dname():
+def dname() -> str:
     return st.session_state.current_user["display_name"] if st.session_state.logged_in else ""
 
-
 # ════════════════════════════════════════════════════════════════════════════
-# AUTH DIALOG
+# AUTH POPUP MODAL
 # ════════════════════════════════════════════════════════════════════════════
 @st.dialog("🎸 SwiftieBot — Sign In", width="small")
 def show_auth_dialog():
     mode = st.session_state.auth_mode
 
+    # Tab switcher inside dialog
     col_l, col_r = st.columns(2)
     with col_l:
         if st.button("🔑 Log In", key="dlg_goto_login",
@@ -589,24 +530,24 @@ def show_auth_dialog():
             else:
                 res = login_user(username, password)
                 if res["success"]:
-                    st.session_state.logged_in    = True
+                    st.session_state.logged_in = True
                     st.session_state.current_user = res["user"]
                     sid = str(uuid.uuid4())
-                    st.session_state.session_id   = sid
+                    st.session_state.session_id = sid
                     create_session(res["user"]["username"], sid)
-                    st.session_state.messages     = []
-                    st.session_state.show_auth    = False
+                    st.session_state.messages = []
+                    st.session_state.show_auth = False
                     st.rerun()
                 else:
                     st.error(res["error"])
         st.markdown("<p style='text-align:center;color:#5a5270;font-size:0.82rem;margin-top:1rem;'>No account? Click Register above.</p>", unsafe_allow_html=True)
 
-    else:
+    else:  # register
         st.markdown("<p style='text-align:center;color:#7a6e8a;font-style:italic;margin-bottom:1rem;'>Create your Swiftie account 💛</p>", unsafe_allow_html=True)
-        new_user    = st.text_input("Username (letters & numbers only)", key="dlg_reg_user",     placeholder="swiftie123")
-        new_display = st.text_input("Display name (optional)",            key="dlg_reg_display", placeholder="Taylor's #1 Fan")
-        new_pass    = st.text_input("Password (min 6 chars)",             key="dlg_reg_pass",    type="password", placeholder="••••••")
-        new_pass2   = st.text_input("Confirm password",                   key="dlg_reg_pass2",   type="password", placeholder="••••••")
+        new_user    = st.text_input("Username (letters & numbers only)", key="dlg_reg_user", placeholder="swiftie123")
+        new_display = st.text_input("Display name (optional)", key="dlg_reg_display", placeholder="Taylor's #1 Fan")
+        new_pass    = st.text_input("Password (min 6 chars)", key="dlg_reg_pass", type="password", placeholder="••••••")
+        new_pass2   = st.text_input("Confirm password", key="dlg_reg_pass2", type="password", placeholder="••••••")
         if st.button("Create Account →", key="dlg_btn_reg"):
             if not new_user or not new_pass:
                 st.error("Please fill in all required fields.")
@@ -616,18 +557,18 @@ def show_auth_dialog():
                 res = register_user(new_user, new_pass, new_display)
                 if res["success"]:
                     st.success("Account created! Logging you in... ✨")
-                    st.session_state.logged_in    = True
+                    st.session_state.logged_in = True
                     st.session_state.current_user = res["user"]
                     sid = str(uuid.uuid4())
-                    st.session_state.session_id   = sid
+                    st.session_state.session_id = sid
                     create_session(res["user"]["username"], sid)
-                    st.session_state.messages     = []
-                    st.session_state.show_auth    = False
+                    st.session_state.messages = []
+                    st.session_state.show_auth = False
                     st.rerun()
                 else:
                     st.error(res["error"])
 
-
+# Show dialog if triggered
 if st.session_state.show_auth and not st.session_state.logged_in:
     show_auth_dialog()
 
@@ -644,26 +585,28 @@ with st.sidebar:
             st.session_state.show_auth = True
             st.rerun()
     else:
+        # User info
         st.markdown(f"**👤 {dname()}**")
         st.caption(f"@{uname()}")
         st.markdown("---")
 
+        # New chat
         if st.button("➕ New Chat", key="sb_new_chat"):
             sid = str(uuid.uuid4())
-            st.session_state.session_id  = sid
+            st.session_state.session_id = sid
             create_session(uname(), sid)
-            st.session_state.messages    = []
+            st.session_state.messages   = []
             st.session_state.song_result = None
-            st.session_state.pop("nlp_facts_cache", None)   # refresh facts on next message
             st.rerun()
 
+        # Session history
         st.markdown("**📂 Recent Chats**")
         try:
             sessions = get_user_sessions(uname())
             for s in sessions[:8]:
-                sid    = s["session_id"]
-                count  = s.get("message_count", 0)
-                ts     = s.get("last_updated", s.get("created_at", ""))[:10]
+                sid   = s["session_id"]
+                count = s.get("message_count", 0)
+                ts    = s.get("last_updated", s.get("created_at", ""))[:10]
                 is_cur = sid == st.session_state.session_id
                 label  = f"{'🟢 ' if is_cur else ''}💬 {ts} · {count} msg{'s' if count != 1 else ''}"
                 if st.button(label, key=f"sb_sess_{sid}"):
@@ -675,6 +618,8 @@ with st.sidebar:
             st.caption("Could not load sessions.")
 
         st.markdown("---")
+
+        # Quick topics
         st.markdown("**🎵 Quick Topics**")
         topics = [
             ("📀 All Albums",    "List all of Taylor Swift's studio albums in order with release years"),
@@ -697,17 +642,14 @@ with st.sidebar:
         with col1:
             if st.button("🗑️ Clear", key="sb_clear"):
                 sid = str(uuid.uuid4())
-                st.session_state.session_id  = sid
+                st.session_state.session_id = sid
                 create_session(uname(), sid)
-                st.session_state.messages    = []
+                st.session_state.messages = []
                 st.session_state.song_result = None
-                st.session_state.pop("nlp_facts_cache", None)
                 st.rerun()
         with col2:
             if st.button("🚪 Logout", key="sb_logout"):
-                for k in ["logged_in", "current_user", "messages", "song_result",
-                          "song_result_source", "admin_authenticated", "_inject_prompt",
-                          "nlp_facts_cache"]:
+                for k in ["logged_in","current_user","messages","song_result","admin_authenticated","_inject_prompt"]:
                     st.session_state[k] = _defaults.get(k)
                 st.session_state.session_id = str(uuid.uuid4())
                 st.rerun()
@@ -721,13 +663,13 @@ with st.sidebar:
 st.markdown("""
 <div class="ts-header">
   <h1>✨ SwiftieBot ✨</h1>
-  <p>Your expert guide to Taylor Swift's music, albums &amp; discography</p>
+  <p>Your expert guide to Taylor Swift's music, albums & discography</p>
 </div>
 <div class="ts-divider"></div>
 """, unsafe_allow_html=True)
 
 # ════════════════════════════════════════════════════════════════════════════
-# NOT LOGGED IN — HERO
+# NOT LOGGED IN — HERO SCREEN
 # ════════════════════════════════════════════════════════════════════════════
 if not st.session_state.logged_in:
     st.markdown("""
@@ -753,9 +695,9 @@ if not st.session_state.logged_in:
     st.stop()
 
 # ════════════════════════════════════════════════════════════════════════════
-# TABS
+# TABS (logged in only)
 # ════════════════════════════════════════════════════════════════════════════
-is_admin   = st.session_state.current_user.get("is_admin", False)
+is_admin = st.session_state.current_user.get("is_admin", False)
 tab_labels = ["💬 Chat", "🔍 Song Search", "📜 My History", "💡 Contribute"]
 if is_admin:
     tab_labels.append("🛡️ Admin")
@@ -763,7 +705,6 @@ if is_admin:
 tabs = st.tabs(tab_labels)
 tab_chat, tab_search, tab_history, tab_contribute = tabs[:4]
 tab_admin = tabs[4] if is_admin else None
-
 
 # ════════════════════════════════════════════════════════════════════════════
 # TAB 1 — CHAT
@@ -787,19 +728,14 @@ with tab_chat:
             st.markdown(msg["content"])
 
     def _send(user_text: str):
-        # Append to history before calling so context is complete
         st.session_state.messages.append({"role": "user", "content": user_text})
         save_message(uname(), st.session_state.session_id, "user", user_text)
-
         with st.chat_message("user", avatar="🎀"):
             st.markdown(user_text)
-
         with st.chat_message("assistant", avatar="🎸"):
             with st.spinner("✨ Searching the Swiftie archives..."):
-                # Pass user_text so build_system_prompt can inject song-specific facts
-                reply = groq_chat(st.session_state.messages[:-1], user_text)
+                reply = groq_chat(st.session_state.messages, user_text)
             st.markdown(reply)
-
         st.session_state.messages.append({"role": "assistant", "content": reply})
         save_message(uname(), st.session_state.session_id, "assistant", reply)
 
@@ -812,28 +748,20 @@ with tab_chat:
     if user_input := st.chat_input("Ask me anything about Taylor Swift..."):
         _send(user_input)
 
-
 # ════════════════════════════════════════════════════════════════════════════
 # TAB 2 — SONG SEARCH
-# Priority: 1) Community facts  2) Firestore cache  3) Groq AI
 # ════════════════════════════════════════════════════════════════════════════
 with tab_search:
     st.markdown("### 🔍 Song Search")
-    st.markdown(
-        "<p style='color:#7a6e8a;font-size:0.88rem;'>"
-        "Search any Taylor Swift song for full details. "
-        "Community knowledge is checked first, then the database cache, then the AI."
-        "</p>",
-        unsafe_allow_html=True,
-    )
+    st.markdown("<p style='color:#7a6e8a;font-size:0.88rem;'>Search any Taylor Swift song for full details — themes, story, writers, chart stats, and an iconic line.</p>", unsafe_allow_html=True)
 
     ALBUMS = [
-        "Any album", "Taylor Swift (2006)", "Fearless (2008)", "Speak Now (2010)",
-        "Red (2012)", "1989 (2014)", "reputation (2017)", "Lover (2019)",
-        "folklore (2020)", "evermore (2020)", "Midnights (2022)",
+        "Any album","Taylor Swift (2006)","Fearless (2008)","Speak Now (2010)",
+        "Red (2012)","1989 (2014)","reputation (2017)","Lover (2019)",
+        "folklore (2020)","evermore (2020)","Midnights (2022)",
         "The Tortured Poets Department (2024)",
-        "Fearless (Taylor's Version)", "Red (Taylor's Version)",
-        "Speak Now (Taylor's Version)", "1989 (Taylor's Version)",
+        "Fearless (Taylor's Version)","Red (Taylor's Version)",
+        "Speak Now (Taylor's Version)","1989 (Taylor's Version)",
     ]
 
     col1, col2 = st.columns([2, 1])
@@ -843,132 +771,48 @@ with tab_search:
         album_filter = st.selectbox("Filter by album", ALBUMS)
 
     if st.button("🔍  Search", key="search_btn") and song_query.strip():
-        af = album_filter if album_filter != "Any album" else None
-        q  = song_query.strip()
+        ftext = f" from album: {album_filter}" if album_filter != "Any album" else ""
+        with st.spinner("✨ Looking up song details..."):
+            raw = groq_once(f"Search for Taylor Swift song: '{song_query}'{ftext}").strip()
+            if raw.startswith("```"):
+                raw = raw.split("```")[1]
+                if raw.startswith("json"): raw = raw[4:]
+            raw = raw.strip()
+            try:
+                result = _json.loads(raw)
+                st.session_state.song_result = result
+                save_search(uname(), st.session_state.session_id, song_query,
+                            album_filter if album_filter != "Any album" else None, result)
+            except Exception:
+                st.session_state.song_result = {"found": False, "message": "Couldn't parse result. Please try again!"}
 
-        # ── NLP: expand query with fuzzy correction ───────────────────────────
-        candidates = expand_song_query(q)
-        # Primary search key = best NLP candidate (first = original, rest = fuzzy suggestions)
-        primary_q  = candidates[0]
-
-        # ── Tier 1: NLP-ranked community facts (highest priority) ─────────────
-        with st.spinner("🧠 Running NLP search through community knowledge..."):
-            # Try each candidate until we get a match
-            facts = []
-            matched_candidate = primary_q
-            for candidate in candidates:
-                facts = get_approved_facts_for_song(candidate.lower())
-                if facts:
-                    matched_candidate = candidate
-                    break
-
-        if facts:
-            # Sort by NLP score if present
-            facts_sorted = sorted(facts, key=lambda x: x.get("_nlp_score", 0), reverse=True)
-            best_fact    = facts_sorted[0]
-
-            # Build rich themes text from top-3 facts
-            themes_parts = []
-            for f in facts_sorted[:3]:
-                themes_parts.append(f"[{f.get('category','').upper()}] {f.get('title','')}: {f.get('content','')}")
-            facts_text = " ✦ ".join(themes_parts)
-
-            # Show NLP correction notice if the query was auto-corrected
-            if matched_candidate.lower() != q.lower():
-                st.info(f"🧠 NLP matched your query to: **{matched_candidate.title()}**")
-
-            st.session_state.song_result = {
-                "found":           True,
-                "song_title":      matched_candidate.title() if matched_candidate != primary_q else q.title(),
-                "album":           af or "See community facts below",
-                "year":            "—",
-                "era":             "—",
-                "writers":         "—",
-                "producers":       "—",
-                "duration":        "—",
-                "chart_peak":      "—",
-                "certifications":  "—",
-                "themes":          facts_text,
-                "story":           f"Assembled from {len(facts)} community-contributed fact(s). "
-                                   f"Top match score: {best_fact.get('_nlp_score', 'n/a')}",
-                "iconic_moment":   "—",
-                "lyric_snippet":   "From the Swiftie community knowledge base",
-                "fun_fact":        best_fact.get("content", "—"),
-                "_from_community": True,
-                "_fact_count":     len(facts),
-            }
-            st.session_state.song_result_source = "community"
-
-        else:
-            # ── Tier 2: global Firestore cache ────────────────────────────────
-            with st.spinner("⚡ Checking saved knowledge..."):
-                cached = None
-                for candidate in candidates:
-                    cached = search_saved_searches(candidate.lower(), af)
-                    if cached:
-                        break
-
-            if cached:
-                st.session_state.song_result        = cached
-                st.session_state.song_result_source = "cache"
-
-            else:
-                # ── Tier 3: Groq AI ───────────────────────────────────────────
-                ftext = f" from album: {af}" if af else ""
-                # Use NLP best candidate for the AI query too
-                ai_q  = candidates[0]
-                with st.spinner("🤖 Asking the AI for details..."):
-                    raw = groq_once(f"Search for Taylor Swift song: '{ai_q}'{ftext}")
-                try:
-                    result = _parse_groq_json(raw)
-                except Exception:
-                    result = {"found": False, "message": "Couldn't parse result. Please try again!"}
-
-                st.session_state.song_result        = result
-                st.session_state.song_result_source = "ai"
-
-                # Cache successful AI result for all future users
-                if result.get("found"):
-                    try:
-                        save_search(uname(), st.session_state.session_id, ai_q, af, result)
-                    except Exception:
-                        pass
-
-    # ── Render result ─────────────────────────────────────────────────────────
     result = st.session_state.song_result
-    source = st.session_state.song_result_source
-
     if result:
         if not result.get("found"):
-            st.warning(f"🎵 {result.get('message', 'Song not found. Try a different spelling!')}")
+            st.warning(f"🎵 {result.get('message','Song not found. Try a different spelling!')}")
         else:
-            if source == "community":
-                st.markdown("<span class='source-badge community'>💡 From community knowledge — highest priority</span>", unsafe_allow_html=True)
-            elif source == "cache":
-                st.markdown("<span class='source-badge'>⚡ Loaded from database cache</span>", unsafe_allow_html=True)
-            else:
-                st.markdown("<span class='source-badge ai'>🤖 Generated by AI · saved to cache</span>", unsafe_allow_html=True)
-
+            # Song header card
             st.markdown(f"""
             <div class="song-card">
-                <h3>🎵 {result.get('song_title', '')}</h3>
-                <span class="album-tag">💿 {result.get('album', '')} · {result.get('year', '')}</span>
-                <div class="lyric-line">"{result.get('lyric_snippet', '')}"</div>
+                <h3>🎵 {result.get('song_title','')}</h3>
+                <span class="album-tag">💿 {result.get('album','')} · {result.get('year','')}</span>
+                <div class="lyric-line">"{result.get('lyric_snippet','')}"</div>
             </div>""", unsafe_allow_html=True)
 
+            # Details grid
             c1, c2 = st.columns(2)
             with c1:
-                for label, key in [("✍️ Songwriters", "writers"), ("🎛️ Producers", "producers"), ("⏱️ Duration", "duration")]:
-                    st.markdown(f"<p class='info-label'>{label}</p><p class='info-value'>{result.get(key, 'Unknown')}</p>", unsafe_allow_html=True)
+                for label, key in [("✍️ Songwriters","writers"),("🎛️ Producers","producers"),("⏱️ Duration","duration")]:
+                    st.markdown(f"<p class='info-label'>{label}</p><p class='info-value'>{result.get(key,'Unknown')}</p>", unsafe_allow_html=True)
             with c2:
-                for label, key in [("📊 Chart Peak", "chart_peak"), ("🏅 Certifications", "certifications"), ("🌐 Era", "era")]:
-                    st.markdown(f"<p class='info-label'>{label}</p><p class='info-value'>{result.get(key, 'Unknown')}</p>", unsafe_allow_html=True)
+                for label, key in [("📊 Chart Peak","chart_peak"),("🏅 Certifications","certifications"),("🌐 Era","era")]:
+                    st.markdown(f"<p class='info-label'>{label}</p><p class='info-value'>{result.get(key,'Unknown')}</p>", unsafe_allow_html=True)
 
             st.markdown(f"""
-            <div class="section-block"><h4>🎭 Themes &amp; Mood</h4><p>{result.get('themes', '')}</p></div>
-            <div class="section-block"><h4>📖 Songwriting Story</h4><p>{result.get('story', '')}</p></div>
-            <div class="section-block"><h4>🌟 Iconic Moment</h4><p>{result.get('iconic_moment', '')}</p></div>
-            <div class="fun-fact-block"><p>{result.get('fun_fact', '')}</p></div>
+            <div class="section-block"><h4>🎭 Themes & Mood</h4><p>{result.get('themes','')}</p></div>
+            <div class="section-block"><h4>📖 Songwriting Story</h4><p>{result.get('story','')}</p></div>
+            <div class="section-block"><h4>🌟 Iconic Moment</h4><p>{result.get('iconic_moment','')}</p></div>
+            <div class="fun-fact-block"><p>{result.get('fun_fact','')}</p></div>
             """, unsafe_allow_html=True)
             st.markdown("<p style='color:#5a5270;font-size:0.82rem;text-align:center;'>💬 Switch to the Chat tab to ask more about this song!</p>", unsafe_allow_html=True)
     else:
@@ -978,7 +822,6 @@ with tab_search:
           <p style="color:#5a4e6a;">Search any Taylor Swift song above.</p>
           <p style="font-size:0.82rem;color:#3a3050;">Try: All Too Well · Cruel Summer · Anti-Hero · Love Story · Shake It Off</p>
         </div>""", unsafe_allow_html=True)
-
 
 # ════════════════════════════════════════════════════════════════════════════
 # TAB 3 — MY HISTORY
@@ -1002,10 +845,10 @@ with tab_history:
     else:
         st.markdown(f"<p style='color:#7a6e8a;font-size:0.82rem;'>{len(sessions)} session(s) found.</p>", unsafe_allow_html=True)
         for i, sess in enumerate(sessions):
-            sid       = sess.get("session_id", "")
-            count     = sess.get("message_count", 0)
-            ts        = sess.get("last_updated", sess.get("created_at", ""))[:19].replace("T", " ")
-            is_cur    = sid == st.session_state.session_id
+            sid      = sess.get("session_id", "")
+            count    = sess.get("message_count", 0)
+            ts       = sess.get("last_updated", sess.get("created_at",""))[:19].replace("T"," ")
+            is_cur   = sid == st.session_state.session_id
             cur_badge = " 🟢 current" if is_cur else ""
 
             col_info, col_load, col_del = st.columns([5, 1.5, 1])
@@ -1014,14 +857,14 @@ with tab_history:
                 st.markdown(f"""
                 <div class="{card_cls}">
                   <div class="h-id">Session {sid[:8]}…{cur_badge}</div>
-                  <div class="h-meta">🕐 {ts} &nbsp;·&nbsp; 💬 {count} message{'s' if count != 1 else ''}</div>
+                  <div class="h-meta">🕐 {ts} &nbsp;·&nbsp; 💬 {count} message{'s' if count!=1 else ''}</div>
                 </div>""", unsafe_allow_html=True)
             with col_load:
                 if not is_cur and st.button("Load", key=f"load_{i}"):
                     hist = get_user_session_history(uname(), sid)
                     if hist:
-                        st.session_state.session_id  = sid
-                        st.session_state.messages    = hist
+                        st.session_state.session_id = sid
+                        st.session_state.messages   = hist
                         st.session_state.song_result = None
                         st.success(f"Loaded {len(hist)} messages!")
                         st.rerun()
@@ -1033,19 +876,18 @@ with tab_history:
                     if sid == st.session_state.session_id:
                         new_sid = str(uuid.uuid4())
                         st.session_state.session_id = new_sid
-                        st.session_state.messages   = []
+                        st.session_state.messages = []
                         create_session(uname(), new_sid)
                     st.rerun()
-
 
 # ════════════════════════════════════════════════════════════════════════════
 # TAB 4 — CONTRIBUTE
 # ════════════════════════════════════════════════════════════════════════════
 with tab_contribute:
     st.markdown("### 💡 Contribute a Taylor Swift Fact")
-    st.markdown("<p style='color:#7a6e8a;font-size:0.88rem;'>Share something you know! Approved facts get added to SwiftieBot's knowledge and are shown first in song searches.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color:#7a6e8a;font-size:0.88rem;'>Share something you know! Approved facts get added to SwiftieBot's knowledge and used when answering other users.</p>", unsafe_allow_html=True)
 
-    CATEGORIES = ["song", "album", "tour", "personal", "award", "easter_egg", "other"]
+    CATEGORIES = ["song","album","tour","personal","award","easter_egg","other"]
 
     with st.form("contribute_form", clear_on_submit=True):
         fc1, fc2 = st.columns([1, 2])
@@ -1070,7 +912,7 @@ with tab_contribute:
 
     st.markdown("---")
     st.markdown("### ✅ Approved Community Facts")
-    st.markdown("<p style='color:#7a6e8a;font-size:0.85rem;'>These facts are now part of SwiftieBot's knowledge base and appear first in song searches.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color:#7a6e8a;font-size:0.85rem;'>These facts are now part of SwiftieBot's knowledge base.</p>", unsafe_allow_html=True)
 
     try:
         approved = get_community_facts("approved")
@@ -1083,12 +925,11 @@ with tab_contribute:
         for fact in approved[:20]:
             st.markdown(f"""
             <div class="fact-card">
-              <span class="fact-cat">{fact.get('category', '').upper()}</span>
-              <div class="fact-title">{fact.get('title', '')}</div>
-              <div class="fact-content">{fact.get('content', '')}</div>
-              <div class="fact-meta">By @{fact.get('username', '')} · {fact.get('submitted_at', '')[:10]}</div>
+              <span class="fact-cat">{fact.get('category','').upper()}</span>
+              <div class="fact-title">{fact.get('title','')}</div>
+              <div class="fact-content">{fact.get('content','')}</div>
+              <div class="fact-meta">By @{fact.get('username','')} · {fact.get('submitted_at','')[:10]}</div>
             </div>""", unsafe_allow_html=True)
-
 
 # ════════════════════════════════════════════════════════════════════════════
 # TAB 5 — ADMIN
@@ -1110,6 +951,7 @@ if is_admin and tab_admin is not None:
             st.success("🔓 Admin access granted")
             st.markdown("---")
 
+            # Stats
             try:
                 n_approved = len(get_community_facts("approved"))
                 n_pending  = len(get_community_facts("pending"))
@@ -1120,21 +962,6 @@ if is_admin and tab_admin is not None:
                 c3.metric("❌ Rejected", n_rejected)
             except Exception:
                 pass
-
-            st.markdown("---")
-            st.markdown("#### 🗄️ Song Search Cache")
-            st.markdown(
-                "<p style='color:#7a6e8a;font-size:0.85rem;'>"
-                "Every unique AI song lookup is stored here. Community facts always take priority over this cache.</p>",
-                unsafe_allow_html=True,
-            )
-            try:
-                from firebase_admin import firestore as _fs
-                _db_admin = _fs.client()
-                cache_docs = list(_db_admin.collection("song_searches").limit(500).stream())
-                st.metric("🔍 Cached Song Lookups", len(cache_docs))
-            except Exception:
-                st.caption("Cache stats unavailable.")
 
             st.markdown("---")
             st.markdown("#### 📥 Pending Submissions")
@@ -1149,13 +976,13 @@ if is_admin and tab_admin is not None:
                 st.info("No pending submissions. ✨")
             else:
                 for fact in pending:
-                    fid = fact.get("id", "")
+                    fid = fact.get("id","")
                     st.markdown(f"""
                     <div class="fact-card pending">
-                      <span class="fact-cat" style="background:rgba(255,165,0,0.12);border-color:rgba(255,165,0,0.35);color:#ffa500;">{fact.get('category', '').upper()}</span>
-                      <div class="fact-title">{fact.get('title', '')}</div>
-                      <div class="fact-content">{fact.get('content', '')}</div>
-                      <div class="fact-meta">By @{fact.get('username', '')} · submitted {fact.get('submitted_at', '')[:10]}</div>
+                      <span class="fact-cat" style="background:rgba(255,165,0,0.12);border-color:rgba(255,165,0,0.35);color:#ffa500;">{fact.get('category','').upper()}</span>
+                      <div class="fact-title">{fact.get('title','')}</div>
+                      <div class="fact-content">{fact.get('content','')}</div>
+                      <div class="fact-meta">By @{fact.get('username','')} · submitted {fact.get('submitted_at','')[:10]}</div>
                     </div>""", unsafe_allow_html=True)
                     ca, cr, _ = st.columns([1.5, 1.5, 4])
                     with ca:
