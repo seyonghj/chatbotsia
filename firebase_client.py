@@ -322,9 +322,8 @@ def get_approved_facts_for_song(song_hint: str) -> list:
     """
     Return approved facts relevant to a specific song.
 
-    Because Firestore documents have no dedicated song_title field, we fetch
-    all approved facts and filter locally by checking whether the hint appears
-    in the 'title' or 'content' fields (case-insensitive substring match).
+    Uses NLP fuzzy matching first (via nlp_engine), falls back to plain
+    substring match so it still works if the NLP layer fails to import.
     """
     try:
         all_facts = get_community_facts("approved")
@@ -332,6 +331,16 @@ def get_approved_facts_for_song(song_hint: str) -> list:
         if not hint:
             return []
 
+        # ── Try NLP-ranked matching first ─────────────────────────────────────
+        try:
+            from nlp_engine import rank_facts
+            ranked = rank_facts(hint, all_facts, threshold=0.12, top_k=10)
+            if ranked:
+                return ranked
+        except Exception as nlp_err:
+            print(f"[SwiftieBot] NLP song match failed, falling back: {nlp_err}")
+
+        # ── Fallback: simple substring match ─────────────────────────────────
         matched = []
         for f in all_facts:
             haystack = (
@@ -341,6 +350,29 @@ def get_approved_facts_for_song(song_hint: str) -> list:
             if hint in haystack:
                 matched.append(f)
         return matched
+
     except Exception as e:
         print(f"[SwiftieBot] get_approved_facts_for_song error: {e}")
+        return []
+
+
+def search_facts_by_nlp(user_msg: str) -> list:
+    """
+    Full NLP pipeline search against ALL approved community facts.
+    Called by app.py on every chat message to find the most relevant facts
+    to inject into the system prompt.
+
+    Returns a list of fact dicts sorted by NLP relevance score (highest first),
+    each with an added '_nlp_score' key.
+    """
+    try:
+        all_facts = get_community_facts("approved")
+        if not all_facts:
+            return []
+
+        from nlp_engine import rank_facts
+        return rank_facts(user_msg, all_facts, threshold=0.12, top_k=8)
+
+    except Exception as e:
+        print(f"[SwiftieBot] search_facts_by_nlp error: {e}")
         return []
