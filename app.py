@@ -1,6 +1,6 @@
 import streamlit as st
 from groq import Groq
-import os, uuid, json as _json
+import os, uuid, json as _json, re
 from firebase_client import (
     register_user, login_user,
     create_session, get_user_sessions,
@@ -385,7 +385,38 @@ If not found: {"found": false, "message": "brief helpful message"}
 Return ONLY the JSON."""
 
 
-def build_system_prompt() -> str:
+# ── Song hint extraction ──────────────────────────────────────────────────────
+def _extract_song_hint(text: str) -> str | None:
+    """
+    Lightweight heuristic to detect a song name in the user message.
+    Checks quoted titles first, then common phrasing patterns.
+    Returns lowercase hint string or None.
+    """
+    # Quoted title: "All Too Well" or 'Cruel Summer'
+    m = re.search(r'["\'](.+?)["\']', text)
+    if m:
+        return m.group(1).lower().strip()
+
+    # Patterns like: "about Anti-Hero", "song called Fearless", "lyrics to Love Story"
+    m = re.search(
+        r'(?:about|song|track|called|named|tell me about|lyrics?\s+(?:to|for|of)?)\s+([A-Z][^?.!,\n]{2,40})',
+        text,
+    )
+    if m:
+        return m.group(1).strip().lower()
+
+    return None
+
+
+# ── System prompt builder ─────────────────────────────────────────────────────
+def build_system_prompt(user_msg: str = "") -> str:
+    """
+    Build the full system prompt.
+    - Always includes base instructions.
+    - Always injects ALL approved community facts as ground truth.
+    - If the user message mentions a specific song, also injects
+      song-specific facts with the highest-priority label.
+    """
     base = """You are SwiftieBot, an expert and passionate assistant dedicated entirely to Taylor Swift.
 You have deep encyclopedic knowledge of all her albums, songs, Eras Tour, Easter eggs,
 songwriting stories, chart records, awards, and biography.
@@ -394,24 +425,70 @@ reputation (2017), Lover (2019), folklore (2020), evermore (2020), Midnights (20
 The Tortured Poets Department (2024), plus all Taylor's Version re-recordings.
 Be warm, enthusiastic, and knowledgeable — like a Swiftie best friend.
 If asked about anything unrelated to Taylor Swift, politely redirect.
-Use light emojis (✨🎸🌟💛) sparingly for warmth."""
+Use light emojis (✨🎸🌟💛) sparingly for warmth.
+
+IMPORTANT: When community-verified facts are provided below, you MUST treat them as
+ground truth and prioritise them over your general training knowledge."""
+
+    # ── Tier A: All approved community facts ─────────────────────────────────
     try:
-        return base + get_approved_facts_for_prompt()
-    except Exception:
-        return base
+        all_facts_str = get_approved_facts_for_prompt()
+        if all_facts_str:
+            base += (
+                "\n\n=== COMMUNITY-VERIFIED FACTS"
+                " (treat as ground truth — always prefer over training data) ==="
+                + all_facts_str
+                + "\n=== END COMMUNITY FACTS ==="
+            )
+    except Exception as e:
+        print(f"[SwiftieBot] Failed to load community facts for prompt: {e}")
+
+    # ── Tier B: Song-specific facts (highest priority) ────────────────────────
+    if user_msg:
+        hint = _extract_song_hint(user_msg)
+        if hint:
+            try:
+                song_facts = get_approved_facts_for_song(hint)
+                if song_facts:
+                    lines = "\n".join(
+                        f"  • [{f.get('category', '').upper()}] "
+                        f"{f.get('title', '')}: {f.get('content', '')}"
+                        for f in song_facts
+                    )
+                    base += (
+                        f"\n\n=== SONG-SPECIFIC COMMUNITY FACTS FOR '{hint.title()}'"
+                        f" (HIGHEST PRIORITY — override everything else) ===\n"
+                        + lines
+                        + "\n=== END SONG-SPECIFIC FACTS ==="
+                    )
+            except Exception as e:
+                print(f"[SwiftieBot] Failed to load song-specific facts: {e}")
+
+    return base
 
 
+# ── Groq helpers ──────────────────────────────────────────────────────────────
 def groq_chat(history: list, user_msg: str) -> str:
-    msgs = [{"role": "system", "content": build_system_prompt()}]
-    for m in history:
+    """
+    Send a chat message to Groq.
+    The system prompt is built fresh each call so community facts are always current,
+    and song-specific facts are injected when the user asks about a specific song.
+    """
+    msgs = [{"role": "system", "content": build_system_prompt(user_msg)}]
+    for m in history[:-1] if history and history[-1]["role"] == "user" else history:
         msgs.append({"role": m["role"], "content": m["content"]})
-    if not msgs or msgs[-1]["role"] != "user":
-        msgs.append({"role": "user", "content": user_msg})
-    r = groq_client.chat.completions.create(model=GROQ_MODEL, messages=msgs, max_tokens=1024)
+    msgs.append({"role": "user", "content": user_msg})
+
+    r = groq_client.chat.completions.create(
+        model=GROQ_MODEL,
+        messages=msgs,
+        max_tokens=1024,
+    )
     return r.choices[0].message.content
 
 
 def groq_once(user_msg: str) -> str:
+    """One-shot call for song search JSON (no history, no community facts needed)."""
     r = groq_client.chat.completions.create(
         model=GROQ_MODEL,
         messages=[
@@ -684,14 +761,19 @@ with tab_chat:
             st.markdown(msg["content"])
 
     def _send(user_text: str):
+        # Append to history before calling so context is complete
         st.session_state.messages.append({"role": "user", "content": user_text})
         save_message(uname(), st.session_state.session_id, "user", user_text)
+
         with st.chat_message("user", avatar="🎀"):
             st.markdown(user_text)
+
         with st.chat_message("assistant", avatar="🎸"):
             with st.spinner("✨ Searching the Swiftie archives..."):
-                reply = groq_chat(st.session_state.messages, user_text)
+                # Pass user_text so build_system_prompt can inject song-specific facts
+                reply = groq_chat(st.session_state.messages[:-1], user_text)
             st.markdown(reply)
+
         st.session_state.messages.append({"role": "assistant", "content": reply})
         save_message(uname(), st.session_state.session_id, "assistant", reply)
 
@@ -989,8 +1071,8 @@ if is_admin and tab_admin is not None:
             )
             try:
                 from firebase_admin import firestore as _fs
-                _db = _fs.client()
-                cache_docs = list(_db.collection("song_searches").limit(500).stream())
+                _db_admin = _fs.client()
+                cache_docs = list(_db_admin.collection("song_searches").limit(500).stream())
                 st.metric("🔍 Cached Song Lookups", len(cache_docs))
             except Exception:
                 st.caption("Cache stats unavailable.")
