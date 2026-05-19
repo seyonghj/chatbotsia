@@ -410,69 +410,117 @@ def _get_cached_facts() -> list:
 
 def build_system_prompt(user_msg: str = "") -> str:
     """
-    Build the full system prompt with three layers of community knowledge:
-
-    Layer 1 — Base persona & instructions (always present)
-    Layer 2 — NLP-ranked facts most relevant to THIS message (dynamic, top-8)
-    Layer 3 — All remaining approved facts as background context (static)
-
-    The NLP engine scores every fact in the database against the user message
-    using fuzzy string matching, keyword overlap, named-entity alignment and
-    intent-category matching — so the AI always sees the most relevant facts
-    at the TOP of its context window, labelled as ground truth.
+    Enhanced system prompt builder.
+    
+    Features:
+    - Works for BOTH Taylor and non-Taylor questions
+    - ALWAYS injects community facts
+    - NLP retrieval for best matching facts
+    - Database facts are treated as highest priority
     """
-base = (
-    "You are SwiftieBot, a friendly, intelligent, and conversational AI assistant.\n"
-    
-    "Your main specialty is Taylor Swift, including her albums, songs, Eras Tour,\n"
-    "Easter eggs, songwriting stories, awards, chart records, and biography.\n"
-    
-    "However, you are NOT limited to Taylor Swift.\n"
-    "If the user asks about another topic, person, song, artist, technology, school topic,\n"
-    "or anything else, respond naturally and helpfully.\n"
-    
-    "If relevant information exists in the database context or community facts,\n"
-    "always prioritize and use that information.\n"
-    
-    "Do NOT force the conversation back to Taylor Swift unless the user asks about her.\n"
-    
-    "Be warm, conversational, and engaging.\n"
-    "Use light emojis sparingly for warmth.\n\n"
-    
-    "CRITICAL INSTRUCTION:\n"
-    "Community and database facts injected below are considered ground truth.\n"
-    "You MUST prioritize them over your training data.\n"
-    "If database facts conflict with your own knowledge, the database facts win."
-)
 
+    base = (
+        "You are SwiftieBot, a friendly, intelligent, and conversational AI assistant.\n"
+
+        "Your main specialty is Taylor Swift, including her albums, songs, Eras Tour,\n"
+        "Easter eggs, songwriting stories, awards, chart records, and biography.\n"
+
+        "However, you are NOT limited to Taylor Swift.\n"
+        "If the user asks about another topic, person, song, artist, technology,\n"
+        "school topic, or anything else, respond naturally and helpfully.\n"
+
+        "If relevant information exists in the provided database facts or community facts,\n"
+        "you MUST prioritize and use that information.\n"
+
+        "Do NOT force the conversation back to Taylor Swift unless the user asks about her.\n"
+
+        "Be warm, conversational, and engaging.\n"
+        "Use light emojis sparingly for warmth.\n\n"
+
+        "CRITICAL INSTRUCTION:\n"
+        "Community facts and database facts are considered ground truth.\n"
+        "You MUST prioritize them over your training data.\n"
+        "If database facts conflict with your own knowledge, the database facts win.\n"
+    )
+
+    # Load all approved facts
     all_facts = _get_cached_facts()
 
-    # ── Layer 2: NLP-ranked relevant facts (highest priority section) ─────────
+    # ─────────────────────────────────────────────
+    # ALWAYS inject all community facts
+    # ─────────────────────────────────────────────
+    if all_facts:
+        fact_lines = []
+
+        for f in all_facts[:50]:
+            category = f.get("category", "general")
+            title = f.get("title", "")
+            content = f.get("content", "")
+
+            fact_lines.append(
+                f"[{category.upper()}] {title}: {content}"
+            )
+
+        facts_text = "\n".join(fact_lines)
+
+        base += (
+            "\n\n=== COMMUNITY DATABASE FACTS ===\n"
+            f"{facts_text}\n"
+            "=== END COMMUNITY DATABASE FACTS ===\n"
+        )
+
+    # ─────────────────────────────────────────────
+    # NLP-BOOSTED RELEVANT FACTS
+    # ─────────────────────────────────────────────
     if user_msg and all_facts:
         try:
             nlp_context = build_facts_context(
-                user_msg, all_facts, threshold=0.12, top_k=8
+                user_msg,
+                all_facts,
+                threshold=0.02,
+                top_k=15
             )
+
             if nlp_context:
-                # Detect intent for transparency in the prompt
-                intent   = detect_intent(user_msg)
+                intent = detect_intent(user_msg)
                 entities = extract_entities(user_msg)
+
                 entity_summary = []
+
                 if entities.get("songs"):
-                    entity_summary.append(f"songs: {', '.join(entities['songs'][:2])}")
+                    entity_summary.append(
+                        f"songs: {', '.join(entities['songs'][:3])}"
+                    )
+
                 if entities.get("albums"):
-                    entity_summary.append(f"albums: {', '.join(entities['albums'][:2])}")
+                    entity_summary.append(
+                        f"albums: {', '.join(entities['albums'][:3])}"
+                    )
+
                 if entities.get("eras"):
-                    entity_summary.append(f"eras: {', '.join(entities['eras'][:2])}")
-                ent_str = f" | detected entities — {'; '.join(entity_summary)}" if entity_summary else ""
+                    entity_summary.append(
+                        f"eras: {', '.join(entities['eras'][:3])}"
+                    )
+
+                ent_str = ""
+
+                if entity_summary:
+                    ent_str = (
+                        " | detected entities — "
+                        + "; ".join(entity_summary)
+                    )
 
                 base += (
-                    f"\n\n[NLP RETRIEVAL: intent={intent}{ent_str}]"
-                    + nlp_context
+                    f"\n\n=== NLP RELEVANT FACTS ===\n"
+                    f"[intent={intent}{ent_str}]\n"
+                    f"{nlp_context}\n"
+                    "=== END NLP FACTS ===\n"
                 )
-        except Exception as e:
-            print(f"[SwiftieBot] NLP context build failed: {e}")
 
+        except Exception as e:
+            print(f"[SwiftieBot] NLP retrieval failed: {e}")
+
+    return base
     # ── Layer 3: All remaining approved facts (background context) ────────────
     if all_facts:
         try:
