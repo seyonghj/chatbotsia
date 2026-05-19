@@ -303,23 +303,34 @@ def search_saved_searches(query: str, album_filter=None):
         pass
 
     return None
-
 def get_approved_facts_for_song(query: str) -> list:
     """
     Return approved community facts whose title or content mentions the song.
-    Used as Tier 2 DB check before calling the AI.
+    Checks both directions: query inside fact, AND fact words inside query.
     """
     query_lower = query.strip().lower()
+    query_words = set(query_lower.split())
+
     try:
         facts = get_community_facts("approved")
-        return [
-            f for f in facts
-            if query_lower in f.get("title", "").lower()
-            or query_lower in f.get("content", "").lower()
-        ]
+        matched = []
+        for f in facts:
+            title   = f.get("title",   "").lower()
+            content = f.get("content", "").lower()
+
+            # Direction 1: song name appears in the fact
+            if query_lower in title or query_lower in content:
+                matched.append(f)
+                continue
+
+            # Direction 2: significant words from the fact title appear in the query
+            title_words = set(title.split()) - {"a", "an", "the", "of", "in", "on", "at", "to", "for", "is", "it"}
+            if title_words and title_words.issubset(query_words):
+                matched.append(f)
+
+        return matched
     except Exception:
         return []
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 # COMMUNITY FACTS
