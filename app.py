@@ -6,6 +6,7 @@ from firebase_client import (
     create_session, get_user_sessions,
     get_user_session_history, delete_user_session,
     save_message, load_messages, save_search,
+    search_saved_searches, get_approved_facts_for_song,
     submit_community_fact, get_community_facts,
     review_community_fact, get_approved_facts_for_prompt,
 )
@@ -171,6 +172,31 @@ html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
     box-shadow: 0 4px 15px rgba(212,175,55,0.15);
 }
 .stButton > button:active { transform: translateY(0); }
+
+/* ── Source badge ── */
+.source-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(50,200,120,0.1);
+    border: 1px solid rgba(50,200,120,0.3);
+    color: #50c878;
+    border-radius: 20px;
+    padding: 4px 14px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    margin-bottom: 0.8rem;
+}
+.source-badge.ai {
+    background: rgba(147,112,219,0.1);
+    border-color: rgba(147,112,219,0.3);
+    color: #9370db;
+}
+.source-badge.community {
+    background: rgba(212,175,55,0.1);
+    border-color: rgba(212,175,55,0.3);
+    color: #d4af37;
+}
 
 /* ── Auth modal overlay ── */
 .modal-overlay {
@@ -476,6 +502,16 @@ def groq_once(user_msg: str) -> str:
     )
     return r.choices[0].message.content
 
+def _parse_groq_json(raw: str) -> dict:
+    """Strip markdown fences and parse JSON from Groq response."""
+    raw = raw.strip()
+    if raw.startswith("```"):
+        parts = raw.split("```")
+        raw = parts[1] if len(parts) > 1 else raw
+        if raw.startswith("json"):
+            raw = raw[4:]
+    return _json.loads(raw.strip())
+
 # ── Session defaults ──────────────────────────────────────────────────────────
 _defaults = {
     "logged_in": False,
@@ -483,6 +519,7 @@ _defaults = {
     "session_id": str(uuid.uuid4()),
     "messages": [],
     "song_result": None,
+    "song_result_source": None,   # "cache" | "community" | "ai"
     "auth_mode": "login",
     "admin_authenticated": False,
     "_inject_prompt": None,
@@ -505,7 +542,6 @@ def dname() -> str:
 def show_auth_dialog():
     mode = st.session_state.auth_mode
 
-    # Tab switcher inside dialog
     col_l, col_r = st.columns(2)
     with col_l:
         if st.button("🔑 Log In", key="dlg_goto_login",
@@ -649,7 +685,8 @@ with st.sidebar:
                 st.rerun()
         with col2:
             if st.button("🚪 Logout", key="sb_logout"):
-                for k in ["logged_in","current_user","messages","song_result","admin_authenticated","_inject_prompt"]:
+                for k in ["logged_in","current_user","messages","song_result",
+                          "song_result_source","admin_authenticated","_inject_prompt"]:
                     st.session_state[k] = _defaults.get(k)
                 st.session_state.session_id = str(uuid.uuid4())
                 st.rerun()
@@ -749,11 +786,11 @@ with tab_chat:
         _send(user_input)
 
 # ════════════════════════════════════════════════════════════════════════════
-# TAB 2 — SONG SEARCH
+# TAB 2 — SONG SEARCH  (DB-first: cache → community facts → AI)
 # ════════════════════════════════════════════════════════════════════════════
 with tab_search:
     st.markdown("### 🔍 Song Search")
-    st.markdown("<p style='color:#7a6e8a;font-size:0.88rem;'>Search any Taylor Swift song for full details — themes, story, writers, chart stats, and an iconic line.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color:#7a6e8a;font-size:0.88rem;'>Search any Taylor Swift song for full details — themes, story, writers, chart stats, and an iconic line. Results are pulled from the database first; the AI is only called when needed.</p>", unsafe_allow_html=True)
 
     ALBUMS = [
         "Any album","Taylor Swift (2006)","Fearless (2008)","Speak Now (2010)",
@@ -771,26 +808,80 @@ with tab_search:
         album_filter = st.selectbox("Filter by album", ALBUMS)
 
     if st.button("🔍  Search", key="search_btn") and song_query.strip():
-        ftext = f" from album: {album_filter}" if album_filter != "Any album" else ""
-        with st.spinner("✨ Looking up song details..."):
-            raw = groq_once(f"Search for Taylor Swift song: '{song_query}'{ftext}").strip()
-            if raw.startswith("```"):
-                raw = raw.split("```")[1]
-                if raw.startswith("json"): raw = raw[4:]
-            raw = raw.strip()
-            try:
-                result = _json.loads(raw)
-                st.session_state.song_result = result
-                save_search(uname(), st.session_state.session_id, song_query,
-                            album_filter if album_filter != "Any album" else None, result)
-            except Exception:
-                st.session_state.song_result = {"found": False, "message": "Couldn't parse result. Please try again!"}
+        af = album_filter if album_filter != "Any album" else None
+        q  = song_query.strip()
 
+        # ── Tier 1: global Firestore cache ───────────────────────────────────
+        with st.spinner("⚡ Checking saved knowledge..."):
+            cached = search_saved_searches(q.lower(), af)
+
+        if cached:
+            st.session_state.song_result        = cached
+            st.session_state.song_result_source = "cache"
+
+        else:
+            # ── Tier 2: approved community facts ─────────────────────────────
+            with st.spinner("💡 Checking community facts..."):
+                facts = get_approved_facts_for_song(q.lower())
+
+            if facts:
+                facts_text = " | ".join(f.get("content", "") for f in facts[:3])
+                st.session_state.song_result = {
+                    "found":           True,
+                    "song_title":      q.title(),
+                    "album":           af or "See community facts below",
+                    "year":            "—",
+                    "era":             "—",
+                    "writers":         "—",
+                    "producers":       "—",
+                    "duration":        "—",
+                    "chart_peak":      "—",
+                    "certifications":  "—",
+                    "themes":          facts_text,
+                    "story":           "Assembled from community-contributed facts.",
+                    "iconic_moment":   "—",
+                    "lyric_snippet":   "From the Swiftie community knowledge base",
+                    "fun_fact":        facts[0].get("content", "—"),
+                    "_from_community": True,
+                }
+                st.session_state.song_result_source = "community"
+
+            else:
+                # ── Tier 3: Groq AI ───────────────────────────────────────────
+                ftext = f" from album: {af}" if af else ""
+                with st.spinner("🤖 Asking the AI for details..."):
+                    raw = groq_once(f"Search for Taylor Swift song: '{q}'{ftext}")
+                try:
+                    result = _parse_groq_json(raw)
+                except Exception:
+                    result = {"found": False, "message": "Couldn't parse result. Please try again!"}
+
+                st.session_state.song_result        = result
+                st.session_state.song_result_source = "ai"
+
+                # Cache successful AI result globally for all future users
+                if result.get("found"):
+                    try:
+                        save_search(uname(), st.session_state.session_id, q, af, result)
+                    except Exception:
+                        pass
+
+    # ── Render result ─────────────────────────────────────────────────────────
     result = st.session_state.song_result
+    source = st.session_state.song_result_source
+
     if result:
         if not result.get("found"):
             st.warning(f"🎵 {result.get('message','Song not found. Try a different spelling!')}")
         else:
+            # Source badge
+            if source == "cache":
+                st.markdown("<span class='source-badge'>⚡ Loaded from database cache</span>", unsafe_allow_html=True)
+            elif source == "community":
+                st.markdown("<span class='source-badge community'>💡 Assembled from community facts</span>", unsafe_allow_html=True)
+            else:
+                st.markdown("<span class='source-badge ai'>🤖 Generated by AI · saved to cache</span>", unsafe_allow_html=True)
+
             # Song header card
             st.markdown(f"""
             <div class="song-card">
@@ -916,8 +1007,9 @@ with tab_contribute:
 
     try:
         approved = get_community_facts("approved")
-    except Exception:
+    except Exception as e:
         approved = []
+        st.error(f"Could not load approved facts: {e}")
 
     if not approved:
         st.markdown("<p style='color:#3a3050;text-align:center;padding:1.5rem;'>No approved facts yet. Be the first to contribute! 🌟</p>", unsafe_allow_html=True)
