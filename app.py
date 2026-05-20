@@ -450,11 +450,8 @@ GROQ_MODEL  = "llama-3.1-8b-instant"
 ADMIN_PW    = os.environ.get("ADMIN_PASSWORD") or st.secrets.get("ADMIN_PASSWORD", "swiftieadmin2024")
 
 # Token budget constants
-# llama-3.1-8b-instant TPM limit is 6000.
-# System prompt ~600 tokens, response reserved 800 tokens → ~4600 left for history.
-# We approximate 1 token ≈ 4 characters to stay safely under the limit.
-MAX_HISTORY_CHARS = 3500   # conservative character budget for history messages
-MAX_HISTORY_TURNS = 10     # never send more than 10 exchanges regardless
+MAX_HISTORY_CHARS = 3500
+MAX_HISTORY_TURNS = 10
 
 SONG_SEARCH_PROMPT = """You are a Taylor Swift music expert. Return ONLY a JSON object — no markdown, no backticks:
 {
@@ -477,48 +474,54 @@ SONG_SEARCH_PROMPT = """You are a Taylor Swift music expert. Return ONLY a JSON 
 If not found: {"found": false, "message": "brief helpful message"}
 Return ONLY the JSON."""
 
+
+# ── UPDATED: build_system_prompt ─────────────────────────────────────────────
+# Removed the hard Taylor-Swift-only redirect so the bot can answer general
+# questions too. Community-approved facts are still injected as knowledge.
 def build_system_prompt() -> str:
-    base = """You are SwiftieBot, an expert and passionate assistant dedicated entirely to Taylor Swift.
-You have deep encyclopedic knowledge of all her albums, songs, Eras Tour, Easter eggs,
-songwriting stories, chart records, awards, and biography.
-Albums: Taylor Swift (2006), Fearless (2008), Speak Now (2010), Red (2012), 1989 (2014),
-reputation (2017), Lover (2019), folklore (2020), evermore (2020), Midnights (2022),
-The Tortured Poets Department (2024), plus all Taylor's Version re-recordings.
-Be warm, enthusiastic, and knowledgeable — like a Swiftie best friend.
-If asked about anything unrelated to Taylor Swift, politely redirect.
+    base = """You are SwiftieBot, a warm, knowledgeable, and enthusiastic assistant.
+You have deep encyclopedic expertise in Taylor Swift — all her albums, songs,
+Eras Tour, Easter eggs, songwriting stories, chart records, awards, and biography.
+Albums: Taylor Swift (2006), Fearless (2008), Speak Now (2010), Red (2012),
+1989 (2014), reputation (2017), Lover (2019), folklore (2020), evermore (2020),
+Midnights (2022), The Tortured Poets Department (2024), plus all Taylor's Version
+re-recordings.
+
+You can also answer general questions on any topic — history, science, culture,
+recommendations, and everyday questions. Be helpful, friendly, and accurate.
+
+IMPORTANT — knowledge priority:
+1. If the conversation contains a block labelled [Community-verified facts], treat
+   those facts as ground truth and weave them naturally into your answer.
+2. Use your own Taylor Swift knowledge for everything else.
+3. For non-Taylor topics, answer directly and helpfully.
+
 Use light emojis (✨🎸🌟💛) sparingly for warmth."""
     try:
-        return base + get_approved_facts_for_prompt()
+        # Append all globally approved community facts into the system prompt
+        extra = get_approved_facts_for_prompt()
+        if extra:
+            base += f"\n\n[Community-verified facts from the SwiftieBot knowledge base:{extra}]"
     except Exception:
-        return base
+        pass
+    return base
 
 
 def _trim_history(history: list) -> list:
-    """
-    Keep only the most recent messages that fit within the character budget.
-    Always keeps at least the last 2 messages (1 exchange) for context.
-    Trims from the oldest end, never from the most recent.
-    """
-    # Cap by turn count first
+    """Keep only the most recent messages within the character budget."""
     trimmed = history[-MAX_HISTORY_TURNS * 2:]
-
-    # Then cap by character budget, dropping oldest messages first
     while len(trimmed) > 2:
         total_chars = sum(len(m.get("content", "")) for m in trimmed)
         if total_chars <= MAX_HISTORY_CHARS:
             break
-        # Drop the oldest message
         trimmed = trimmed[1:]
-
     return trimmed
 
 
 def groq_chat(history: list, user_msg: str) -> str:
     """Send trimmed history + new user message to Groq and return reply."""
     system_prompt = build_system_prompt()
-
-    # Trim history to stay within token limits
-    safe_history = _trim_history(history[:-1])  # exclude the user msg we just appended
+    safe_history  = _trim_history(history[:-1])  # exclude the user msg already appended
 
     msgs = [{"role": "system", "content": system_prompt}]
     for m in safe_history:
@@ -528,7 +531,7 @@ def groq_chat(history: list, user_msg: str) -> str:
     r = groq_client.chat.completions.create(
         model=GROQ_MODEL,
         messages=msgs,
-        max_tokens=800,  # reduced from 1024 to leave more room for history
+        max_tokens=800,
     )
     return r.choices[0].message.content
 
@@ -579,6 +582,7 @@ def uname() -> str | None:
 
 def dname() -> str:
     return st.session_state.current_user["display_name"] if st.session_state.logged_in else ""
+
 
 # ════════════════════════════════════════════════════════════════════════════
 # AUTH POPUP MODAL
@@ -651,6 +655,7 @@ def show_auth_dialog():
 
 if st.session_state.show_auth and not st.session_state.logged_in:
     show_auth_dialog()
+
 
 # ════════════════════════════════════════════════════════════════════════════
 # SIDEBAR
@@ -733,6 +738,7 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("<small style='color:#3a3050;'>Powered by Groq · Firebase</small>", unsafe_allow_html=True)
 
+
 # ════════════════════════════════════════════════════════════════════════════
 # HEADER
 # ════════════════════════════════════════════════════════════════════════════
@@ -743,6 +749,7 @@ st.markdown("""
 </div>
 <div class="ts-divider"></div>
 """, unsafe_allow_html=True)
+
 
 # ════════════════════════════════════════════════════════════════════════════
 # NOT LOGGED IN — HERO SCREEN
@@ -770,6 +777,7 @@ if not st.session_state.logged_in:
             st.rerun()
     st.stop()
 
+
 # ════════════════════════════════════════════════════════════════════════════
 # TABS (logged in only)
 # ════════════════════════════════════════════════════════════════════════════
@@ -782,8 +790,11 @@ tabs = st.tabs(tab_labels)
 tab_chat, tab_search, tab_history, tab_contribute = tabs[:4]
 tab_admin = tabs[4] if is_admin else None
 
+
 # ════════════════════════════════════════════════════════════════════════════
 # TAB 1 — CHAT
+# Now checks community facts FIRST, then falls back to AI.
+# Also supports general (non-Taylor) questions.
 # ════════════════════════════════════════════════════════════════════════════
 with tab_chat:
     if not st.session_state.messages:
@@ -803,26 +814,71 @@ with tab_chat:
         with st.chat_message(msg["role"], avatar=avatar):
             st.markdown(msg["content"])
 
+    # ── UPDATED _send: DB community facts → AI ────────────────────────────
     def _send(user_text: str):
+        # 1. Append user message to history and save to DB
         st.session_state.messages.append({"role": "user", "content": user_text})
         save_message(uname(), st.session_state.session_id, "user", user_text)
+
         with st.chat_message("user", avatar="🎀"):
             st.markdown(user_text)
+
         with st.chat_message("assistant", avatar="🎸"):
-            with st.spinner("✨ Searching the Swiftie archives..."):
-                reply = groq_chat(st.session_state.messages, user_text)
+            # ── Tier 1: look up matching community facts ──────────────────
+            community_facts = []
+            try:
+                with st.spinner("💡 Checking community knowledge base..."):
+                    community_facts = get_approved_facts_for_song(user_text.lower()) or []
+            except Exception:
+                community_facts = []
+
+            # ── Build augmented message if facts were found ───────────────
+            if community_facts:
+                facts_lines = "\n".join(
+                    f"- [{f.get('category', 'fact').upper()}] "
+                    f"{f.get('title', '')}: {f.get('content', '')}"
+                    for f in community_facts[:5]   # cap at 5 so we don't bloat the prompt
+                )
+                augmented_msg = (
+                    f"{user_text}\n\n"
+                    f"[Community-verified facts from the database — treat these as ground truth "
+                    f"and incorporate them naturally into your answer:\n{facts_lines}]"
+                )
+                source_label = "community"
+            else:
+                # ── Tier 2: AI only (system prompt already has global facts) ──
+                augmented_msg = user_text
+                source_label  = "ai"
+
+            # ── Call Groq ─────────────────────────────────────────────────
+            with st.spinner("✨ Thinking..."):
+                reply = groq_chat(st.session_state.messages, augmented_msg)
+
+            # Show source badge
+            if source_label == "community":
+                st.markdown(
+                    "<span class='source-badge community'>"
+                    "💡 Answer informed by community-verified facts"
+                    "</span>",
+                    unsafe_allow_html=True,
+                )
+
             st.markdown(reply)
+
+        # 2. Append assistant reply and save
         st.session_state.messages.append({"role": "assistant", "content": reply})
         save_message(uname(), st.session_state.session_id, "assistant", reply)
 
+    # ── Handle sidebar quick-topic injection ─────────────────────────────
     if st.session_state._inject_prompt:
         prompt = st.session_state._inject_prompt
         st.session_state._inject_prompt = None
         _send(prompt)
         st.rerun()
 
-    if user_input := st.chat_input("Ask me anything about Taylor Swift..."):
+    if user_input := st.chat_input("Ask me anything — Taylor Swift or beyond..."):
         _send(user_input)
+
 
 # ════════════════════════════════════════════════════════════════════════════
 # TAB 2 — SONG SEARCH  (DB-first: cache → community facts → AI)
@@ -950,6 +1006,7 @@ with tab_search:
           <p style="font-size:0.82rem;color:#3a3050;">Try: All Too Well · Cruel Summer · Anti-Hero · Love Story · Shake It Off</p>
         </div>""", unsafe_allow_html=True)
 
+
 # ════════════════════════════════════════════════════════════════════════════
 # TAB 3 — MY HISTORY
 # ════════════════════════════════════════════════════════════════════════════
@@ -1007,6 +1064,7 @@ with tab_history:
                         create_session(uname(), new_sid)
                     st.rerun()
 
+
 # ════════════════════════════════════════════════════════════════════════════
 # TAB 4 — CONTRIBUTE
 # ════════════════════════════════════════════════════════════════════════════
@@ -1058,6 +1116,7 @@ with tab_contribute:
               <div class="fact-content">{fact.get('content','')}</div>
               <div class="fact-meta">By @{fact.get('username','')} · {fact.get('submitted_at','')[:10]}</div>
             </div>""", unsafe_allow_html=True)
+
 
 # ════════════════════════════════════════════════════════════════════════════
 # TAB 5 — ADMIN
