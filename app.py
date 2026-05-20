@@ -449,6 +449,13 @@ groq_client = Groq(api_key=groq_key)
 GROQ_MODEL  = "llama-3.1-8b-instant"
 ADMIN_PW    = os.environ.get("ADMIN_PASSWORD") or st.secrets.get("ADMIN_PASSWORD", "swiftieadmin2024")
 
+# Token budget constants
+# llama-3.1-8b-instant TPM limit is 6000.
+# System prompt ~600 tokens, response reserved 800 tokens → ~4600 left for history.
+# We approximate 1 token ≈ 4 characters to stay safely under the limit.
+MAX_HISTORY_CHARS = 3500   # conservative character budget for history messages
+MAX_HISTORY_TURNS = 10     # never send more than 10 exchanges regardless
+
 SONG_SEARCH_PROMPT = """You are a Taylor Swift music expert. Return ONLY a JSON object — no markdown, no backticks:
 {
   "found": true,
@@ -485,22 +492,59 @@ Use light emojis (✨🎸🌟💛) sparingly for warmth."""
     except Exception:
         return base
 
-def groq_chat(history: list[dict], user_msg: str) -> str:
-    msgs = [{"role": "system", "content": build_system_prompt()}]
-    for m in history:
-        msgs.append({"role": m["role"], "content": m["content"]})
-    if not msgs or msgs[-1]["role"] != "user":
-        msgs.append({"role": "user", "content": user_msg})
-    r = groq_client.chat.completions.create(model=GROQ_MODEL, messages=msgs, max_tokens=1024)
-    return r.choices[0].message.content
 
-def groq_once(user_msg: str) -> str:
+def _trim_history(history: list) -> list:
+    """
+    Keep only the most recent messages that fit within the character budget.
+    Always keeps at least the last 2 messages (1 exchange) for context.
+    Trims from the oldest end, never from the most recent.
+    """
+    # Cap by turn count first
+    trimmed = history[-MAX_HISTORY_TURNS * 2:]
+
+    # Then cap by character budget, dropping oldest messages first
+    while len(trimmed) > 2:
+        total_chars = sum(len(m.get("content", "")) for m in trimmed)
+        if total_chars <= MAX_HISTORY_CHARS:
+            break
+        # Drop the oldest message
+        trimmed = trimmed[1:]
+
+    return trimmed
+
+
+def groq_chat(history: list, user_msg: str) -> str:
+    """Send trimmed history + new user message to Groq and return reply."""
+    system_prompt = build_system_prompt()
+
+    # Trim history to stay within token limits
+    safe_history = _trim_history(history[:-1])  # exclude the user msg we just appended
+
+    msgs = [{"role": "system", "content": system_prompt}]
+    for m in safe_history:
+        msgs.append({"role": m["role"], "content": m["content"]})
+    msgs.append({"role": "user", "content": user_msg})
+
     r = groq_client.chat.completions.create(
         model=GROQ_MODEL,
-        messages=[{"role":"system","content":SONG_SEARCH_PROMPT},{"role":"user","content":user_msg}],
-        max_tokens=800,
+        messages=msgs,
+        max_tokens=800,  # reduced from 1024 to leave more room for history
     )
     return r.choices[0].message.content
+
+
+def groq_once(user_msg: str) -> str:
+    """Single-turn Groq call for song search — no history needed."""
+    r = groq_client.chat.completions.create(
+        model=GROQ_MODEL,
+        messages=[
+            {"role": "system", "content": SONG_SEARCH_PROMPT},
+            {"role": "user",   "content": user_msg},
+        ],
+        max_tokens=600,
+    )
+    return r.choices[0].message.content
+
 
 def _parse_groq_json(raw: str) -> dict:
     """Strip markdown fences and parse JSON from Groq response."""
@@ -512,18 +556,19 @@ def _parse_groq_json(raw: str) -> dict:
             raw = raw[4:]
     return _json.loads(raw.strip())
 
+
 # ── Session defaults ──────────────────────────────────────────────────────────
 _defaults = {
-    "logged_in": False,
-    "current_user": None,
-    "session_id": str(uuid.uuid4()),
-    "messages": [],
-    "song_result": None,
-    "song_result_source": None,   # "cache" | "community" | "ai"
-    "auth_mode": "login",
+    "logged_in":           False,
+    "current_user":        None,
+    "session_id":          str(uuid.uuid4()),
+    "messages":            [],
+    "song_result":         None,
+    "song_result_source":  None,
+    "auth_mode":           "login",
     "admin_authenticated": False,
-    "_inject_prompt": None,
-    "show_auth": False,
+    "_inject_prompt":      None,
+    "show_auth":           False,
 }
 for k, v in _defaults.items():
     if k not in st.session_state:
@@ -566,24 +611,24 @@ def show_auth_dialog():
             else:
                 res = login_user(username, password)
                 if res["success"]:
-                    st.session_state.logged_in = True
+                    st.session_state.logged_in    = True
                     st.session_state.current_user = res["user"]
                     sid = str(uuid.uuid4())
-                    st.session_state.session_id = sid
+                    st.session_state.session_id   = sid
                     create_session(res["user"]["username"], sid)
-                    st.session_state.messages = []
-                    st.session_state.show_auth = False
+                    st.session_state.messages     = []
+                    st.session_state.show_auth    = False
                     st.rerun()
                 else:
                     st.error(res["error"])
         st.markdown("<p style='text-align:center;color:#5a5270;font-size:0.82rem;margin-top:1rem;'>No account? Click Register above.</p>", unsafe_allow_html=True)
 
-    else:  # register
+    else:
         st.markdown("<p style='text-align:center;color:#7a6e8a;font-style:italic;margin-bottom:1rem;'>Create your Swiftie account 💛</p>", unsafe_allow_html=True)
-        new_user    = st.text_input("Username (letters & numbers only)", key="dlg_reg_user", placeholder="swiftie123")
-        new_display = st.text_input("Display name (optional)", key="dlg_reg_display", placeholder="Taylor's #1 Fan")
-        new_pass    = st.text_input("Password (min 6 chars)", key="dlg_reg_pass", type="password", placeholder="••••••")
-        new_pass2   = st.text_input("Confirm password", key="dlg_reg_pass2", type="password", placeholder="••••••")
+        new_user    = st.text_input("Username (letters & numbers only)", key="dlg_reg_user",     placeholder="swiftie123")
+        new_display = st.text_input("Display name (optional)",            key="dlg_reg_display", placeholder="Taylor's #1 Fan")
+        new_pass    = st.text_input("Password (min 6 chars)",             key="dlg_reg_pass",    type="password", placeholder="••••••")
+        new_pass2   = st.text_input("Confirm password",                   key="dlg_reg_pass2",   type="password", placeholder="••••••")
         if st.button("Create Account →", key="dlg_btn_reg"):
             if not new_user or not new_pass:
                 st.error("Please fill in all required fields.")
@@ -593,18 +638,17 @@ def show_auth_dialog():
                 res = register_user(new_user, new_pass, new_display)
                 if res["success"]:
                     st.success("Account created! Logging you in... ✨")
-                    st.session_state.logged_in = True
+                    st.session_state.logged_in    = True
                     st.session_state.current_user = res["user"]
                     sid = str(uuid.uuid4())
-                    st.session_state.session_id = sid
+                    st.session_state.session_id   = sid
                     create_session(res["user"]["username"], sid)
-                    st.session_state.messages = []
-                    st.session_state.show_auth = False
+                    st.session_state.messages     = []
+                    st.session_state.show_auth    = False
                     st.rerun()
                 else:
                     st.error(res["error"])
 
-# Show dialog if triggered
 if st.session_state.show_auth and not st.session_state.logged_in:
     show_auth_dialog()
 
@@ -621,28 +665,25 @@ with st.sidebar:
             st.session_state.show_auth = True
             st.rerun()
     else:
-        # User info
         st.markdown(f"**👤 {dname()}**")
         st.caption(f"@{uname()}")
         st.markdown("---")
 
-        # New chat
         if st.button("➕ New Chat", key="sb_new_chat"):
             sid = str(uuid.uuid4())
-            st.session_state.session_id = sid
+            st.session_state.session_id  = sid
             create_session(uname(), sid)
-            st.session_state.messages   = []
+            st.session_state.messages    = []
             st.session_state.song_result = None
             st.rerun()
 
-        # Session history
         st.markdown("**📂 Recent Chats**")
         try:
             sessions = get_user_sessions(uname())
             for s in sessions[:8]:
-                sid   = s["session_id"]
-                count = s.get("message_count", 0)
-                ts    = s.get("last_updated", s.get("created_at", ""))[:10]
+                sid    = s["session_id"]
+                count  = s.get("message_count", 0)
+                ts     = s.get("last_updated", s.get("created_at", ""))[:10]
                 is_cur = sid == st.session_state.session_id
                 label  = f"{'🟢 ' if is_cur else ''}💬 {ts} · {count} msg{'s' if count != 1 else ''}"
                 if st.button(label, key=f"sb_sess_{sid}"):
@@ -654,8 +695,6 @@ with st.sidebar:
             st.caption("Could not load sessions.")
 
         st.markdown("---")
-
-        # Quick topics
         st.markdown("**🎵 Quick Topics**")
         topics = [
             ("📀 All Albums",    "List all of Taylor Swift's studio albums in order with release years"),
@@ -678,9 +717,9 @@ with st.sidebar:
         with col1:
             if st.button("🗑️ Clear", key="sb_clear"):
                 sid = str(uuid.uuid4())
-                st.session_state.session_id = sid
+                st.session_state.session_id  = sid
                 create_session(uname(), sid)
-                st.session_state.messages = []
+                st.session_state.messages    = []
                 st.session_state.song_result = None
                 st.rerun()
         with col2:
@@ -874,7 +913,6 @@ with tab_search:
         if not result.get("found"):
             st.warning(f"🎵 {result.get('message','Song not found. Try a different spelling!')}")
         else:
-            # Source badge
             if source == "cache":
                 st.markdown("<span class='source-badge'>⚡ Loaded from database cache</span>", unsafe_allow_html=True)
             elif source == "community":
@@ -882,7 +920,6 @@ with tab_search:
             else:
                 st.markdown("<span class='source-badge ai'>🤖 Generated by AI · saved to cache</span>", unsafe_allow_html=True)
 
-            # Song header card
             st.markdown(f"""
             <div class="song-card">
                 <h3>🎵 {result.get('song_title','')}</h3>
@@ -890,7 +927,6 @@ with tab_search:
                 <div class="lyric-line">"{result.get('lyric_snippet','')}"</div>
             </div>""", unsafe_allow_html=True)
 
-            # Details grid
             c1, c2 = st.columns(2)
             with c1:
                 for label, key in [("✍️ Songwriters","writers"),("🎛️ Producers","producers"),("⏱️ Duration","duration")]:
@@ -954,8 +990,8 @@ with tab_history:
                 if not is_cur and st.button("Load", key=f"load_{i}"):
                     hist = get_user_session_history(uname(), sid)
                     if hist:
-                        st.session_state.session_id = sid
-                        st.session_state.messages   = hist
+                        st.session_state.session_id  = sid
+                        st.session_state.messages    = hist
                         st.session_state.song_result = None
                         st.success(f"Loaded {len(hist)} messages!")
                         st.rerun()
@@ -967,7 +1003,7 @@ with tab_history:
                     if sid == st.session_state.session_id:
                         new_sid = str(uuid.uuid4())
                         st.session_state.session_id = new_sid
-                        st.session_state.messages = []
+                        st.session_state.messages   = []
                         create_session(uname(), new_sid)
                     st.rerun()
 
@@ -1043,7 +1079,6 @@ if is_admin and tab_admin is not None:
             st.success("🔓 Admin access granted")
             st.markdown("---")
 
-            # Stats
             try:
                 n_approved = len(get_community_facts("approved"))
                 n_pending  = len(get_community_facts("pending"))
