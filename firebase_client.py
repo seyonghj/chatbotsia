@@ -23,9 +23,34 @@ def _init_firebase():
         firebase_admin.initialize_app(cred)
     except Exception:
         # Production: Streamlit secrets
+        # Tries both secret names so either works
         import json
         import streamlit as st
-        key_dict = json.loads(st.secrets["FIREBASE_KEY_JSON"])
+
+        raw = None
+        for key_name in ["FIREBASE_SERVICE_ACCOUNT", "FIREBASE_KEY_JSON"]:
+            try:
+                raw = st.secrets[key_name]
+                break
+            except KeyError:
+                continue
+
+        if raw is None:
+            raise ValueError(
+                "Firebase credentials not found. "
+                "Add FIREBASE_SERVICE_ACCOUNT to your Streamlit secrets."
+            )
+
+        # st.secrets may return a string or an already-parsed AttrDict
+        if isinstance(raw, str):
+            key_dict = json.loads(raw)
+        else:
+            key_dict = dict(raw)
+
+        # Fix private_key: Streamlit sometimes escapes \n as \\n
+        if "private_key" in key_dict:
+            key_dict["private_key"] = key_dict["private_key"].replace("\\n", "\n")
+
         cred = credentials.Certificate(key_dict)
         firebase_admin.initialize_app(cred)
 
@@ -331,7 +356,7 @@ def get_community_facts(status: str = "approved") -> list:
     """
     Fetch community facts filtered by status.
     status: "approved" | "pending" | "rejected"
-    
+
     NOTE: This query requires a Firestore composite index on:
       collection: community_facts
       fields: status (Ascending), submitted_at (Descending)
@@ -350,7 +375,7 @@ def get_community_facts(status: str = "approved") -> list:
             data["id"] = d.id
             results.append(data)
         return results
-    except Exception as e:
+    except Exception:
         # If composite index is missing, fall back to unordered query
         try:
             docs = (
