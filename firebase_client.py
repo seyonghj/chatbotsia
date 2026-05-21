@@ -134,7 +134,7 @@ def login_user(username: str, password: str) -> dict:
     return {
         "success": True,
         "user": {
-            "username":     data["username"],
+            "username":     data.get("username", username),
             "display_name": data.get("display_name", username),
             "is_admin":     data.get("is_admin", False),
         },
